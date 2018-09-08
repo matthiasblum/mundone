@@ -143,13 +143,19 @@ class Workflow(object):
                     if task.is_terminated():
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
+                            run['status'] = task.status
+                        elif resubmit:
+                            logger.info("'{}' has failed".format(task))
+                            run['status'] = STATUSES['pending']
                         else:
                             logger.info("'{}' has failed".format(task))
+                            run['status'] = task.status
 
-                        runs_terminated.append(
-                            (task_id, task.status, task.output.read(), task.stdout, task.stderr)
-                        )
-                        run['status'] = task.status
+                        runs_terminated.append((
+                            task_id, task.status,
+                            task.output.read(), task.stdout, task.stderr,
+                            resubmit
+                        ))
                     else:
                         keep_running = True
                 elif run['status'] == STATUSES['pending']:
@@ -174,9 +180,10 @@ class Workflow(object):
                         # Cannot submit task because at least one dependency failed
                         if not resubmit:
                             # Dependency will not be resubmitted: flag this task as failed
-                            runs_terminated.append(
-                                (task_id, STATUSES['error'], None, None, None)
-                            )
+                            runs_terminated.append((
+                                task_id, STATUSES['error'],
+                                None, None, None, False
+                            ))
                     elif flag & 2:
                         # One or more dependencies pending/running
                         continue
@@ -202,29 +209,52 @@ class Workflow(object):
                 cur.execute(
                     """
                     UPDATE task_run
-                    SET 
-                      status = ?, 
-                      input_file = ?, 
-                      output_file = ?, 
+                    SET
+                      status = ?,
+                      input_file = ?,
+                      output_file = ?,
                       start_time = strftime('%Y-%m-%d %H:%M:%S')
                     WHERE task_id = ? AND active = 1
                     """,
                     (STATUSES['running'], input_file, output_file, task_id)
                 )
 
-            for task_id, status, output, stdout, stderr in runs_terminated:
+            new_runs = []
+            for run in runs_terminated:
+                task_id, status, output, stdout, stderr, resubmit = run
                 cur.execute(
                     """
                     UPDATE task_run
-                    SET 
-                      status = ?, 
-                      output = ?, 
-                      stdout = ?, 
-                      stderr = ?, 
+                    SET
+                      status = ?,
+                      output = ?,
+                      stdout = ?,
+                      stderr = ?,
                       end_time = strftime('%Y-%m-%d %H:%M:%S')
                     WHERE task_id = ? AND active = 1
                     """,
                     (status, json.dumps(output), stdout, stderr, task_id)
+                )
+
+                if status == STATUSES['error'] and resubmit:
+                    new_runs.append(task_id)
+
+            if new_runs:
+                cur.execute(
+                    """
+                    UPDATE task_run
+                    SET active = 0
+                    WHERE task_id in ({})
+                    """.format(','.join(['?' for _ in new_runs])),
+                    new_runs
+                )
+
+                cur.executemany(
+                    """
+                    INSERT INTO task_run (task_id, create_time)
+                    VALUES (?, strftime('%Y-%m-%d %H:%M:%S'))
+                    """,
+                    ((task_id,) for task_id in new_runs)
                 )
 
             cur.close()
@@ -300,11 +330,11 @@ class Workflow(object):
                 cur.execute(
                     """
                     UPDATE task_run
-                    SET 
-                      status = ?, 
-                      output = ?, 
-                      stdout = ?, 
-                      stderr = ?, 
+                    SET
+                      status = ?,
+                      output = ?,
+                      stdout = ?,
+                      stderr = ?,
                       end_time = strftime('%Y-%m-%d %H:%M:%S')
                     WHERE task_id = ? AND active = 1
                     """,
@@ -420,7 +450,9 @@ class Workflow(object):
         for task_id, task in self.tasks.items():
             if task.is_running():
                 task.kill()
-                runs_terminated.append((task_id, task.status, None, None, None))
+                runs_terminated.append((
+                    task_id, task.status, None, None, None, False
+                ))
 
         self.update_runs([], runs_terminated)
 
