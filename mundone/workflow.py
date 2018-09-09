@@ -116,8 +116,7 @@ class Workflow(object):
 
         return _tasks
 
-    def run(self, **kwargs):
-        tasks = kwargs.get("tasks", [])
+    def run(self, tasks=[], **kwargs):
         secs = kwargs.get("secs", 60)
         dependencies = kwargs.get("dependencies", True)
         resume = kwargs.get("resume", False)
@@ -142,6 +141,7 @@ class Workflow(object):
         to_run = {task_id: resubmit for task_id in to_run}
 
         self.active = True
+        failures = []
         while self.active:
             runs = self.get_runs()
             runs_started = []
@@ -157,19 +157,23 @@ class Workflow(object):
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
                             run['status'] = task.status
+                            _resubmit = False
                         elif to_run.get(task_id, 0) > 0:
                             # Failed but will resubmit task
-                            logger.info("'{}' has failed".format(task))
+                            logger.error("'{}' has failed".format(task))
                             run['status'] = STATUSES['pending']
                             to_run[task_id] -= 1
+                            _resubmit = True
                         else:
-                            logger.info("'{}' has failed".format(task))
+                            logger.error("'{}' has failed".format(task))
                             run['status'] = task.status
+                            _resubmit = False
+                            failures.append(task)
 
                         runs_terminated.append((
                             task_id, task.status,
                             task.output.read(), task.stdout, task.stderr,
-                            resubmit
+                            _resubmit
                         ))
                     else:
                         keep_running = True
@@ -191,16 +195,17 @@ class Workflow(object):
                         elif dep_run['status'] != STATUSES['success']:
                             flag |= 2
 
-                    if flag & 1:
-                        # Cannot submit task because at least one dependency failed
-                        # Flag this task as failed
+                    if flag & 2:
+                        # One or more dependencies pending/running
+                        continue
+                    elif flag & 1:
+                        # All dependencies done but one or more failed:
+                        # Cannot start this task, hence flag it as failed
                         runs_terminated.append((
                             task_id, STATUSES['error'],
                             None, None, None, False
                         ))
-                    elif flag & 2:
-                        # One or more dependencies pending/running
-                        continue
+                        failures.append(task)
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
@@ -215,6 +220,11 @@ class Workflow(object):
                 time.sleep(secs)
             else:
                 break
+
+        if failures:
+            logger.error("workflow could not complete because one or more taks failed: {}".format(', '.join(failures)))
+        else:
+            logger.info("workflow completed successfully")
 
     def update_runs(self, runs_started, runs_terminated):
         with sqlite3.connect(self.database) as con:
@@ -428,7 +438,7 @@ class Workflow(object):
                 cur.executemany(
                     """
                     INSERT INTO task_run (task_id, workflow_id, create_time)
-                    VALUES (?, ? strftime('%Y-%m-%d %H:%M:%S'))
+                    VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S'))
                     """,
                     ((task_id, self.id) for task_id in to_run_insert)
                 )
