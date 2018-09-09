@@ -24,6 +24,10 @@ logger.addHandler(ch)
 
 class Workflow(object):
     def __init__(self, tasks, **kwargs):
+        self.id = kwargs.get("id", "1")
+        if not isinstance(self.id, str):
+            raise ValueError("'id' expects a str")
+
         self.workdir = kwargs.get("dir", os.getcwd())
         try:
             os.makedirs(self.workdir)
@@ -78,6 +82,7 @@ class Workflow(object):
                 """
                 CREATE TABLE IF NOT EXISTS task_run (
                   task_id INTEGER NOT NULL,
+                  workflow_id TEXT NOT NULL DEFAULT '1',
                   active INTEGER NOT NULL DEFAULT 1,
                   status INTEGER DEFAULT NULL,
                   input_file TEXT DEFAULT NULL,
@@ -111,7 +116,14 @@ class Workflow(object):
 
         return _tasks
 
-    def run(self, tasks=[], secs=60, dependencies=True, resume=False, dry=False, resubmit=0):
+    def run(self, **kwargs):
+        tasks = kwargs.get("tasks", [])
+        secs = kwargs.get("secs", 60)
+        dependencies = kwargs.get("dependencies", True)
+        resume = kwargs.get("resume", False)
+        dry = kwargs.get("dry", False)
+        resubmit = kwargs.get("resubmit", 0)
+
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("run() arg 1 must be a list or a tuple")
 
@@ -270,8 +282,9 @@ class Workflow(object):
                 """
                 SELECT task_id, status, output
                 FROM task_run
-                WHERE active = 1
-                """
+                WHERE active = 1 AND workflow_id = ?
+                """,
+                (self.id,)
             )
 
             for task_id, status, output in cur:
@@ -295,8 +308,9 @@ class Workflow(object):
             """
             SELECT task_id, status, input_file, output_file
             FROM task_run
-            WHERE active = 1
-            """
+            WHERE active = 1 AND workflow_id = ?
+            """,
+            (self.id,)
         )
 
         tasks_success = set()
@@ -338,9 +352,9 @@ class Workflow(object):
                       stdout = ?,
                       stderr = ?,
                       end_time = strftime('%Y-%m-%d %H:%M:%S')
-                    WHERE task_id = ? AND active = 1
+                    WHERE task_id = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (returncode, json.dumps(output), stdout, stderr, task_id)
+                    (returncode, json.dumps(output), stdout, stderr, task_id, self.id)
                 )
 
             con.commit()
@@ -406,17 +420,17 @@ class Workflow(object):
                     """
                     UPDATE task_run
                     SET active = 0
-                    WHERE task_id in ({})
+                    WHERE task_id in ({}) AND workflow_id = ?
                     """.format(','.join(['?' for _ in to_run_insert])),
-                    tuple(to_run_insert)
+                    tuple(to_run_insert) + (self.id,)
                 )
 
                 cur.executemany(
                     """
-                    INSERT INTO task_run (task_id, create_time)
-                    VALUES (?, strftime('%Y-%m-%d %H:%M:%S'))
+                    INSERT INTO task_run (task_id, workflow_id, create_time)
+                    VALUES (?, ? strftime('%Y-%m-%d %H:%M:%S'))
                     """,
-                    ((task_id,) for task_id in to_run_insert)
+                    ((task_id, self.id) for task_id in to_run_insert)
                 )
 
             con.commit()
