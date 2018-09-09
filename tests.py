@@ -32,8 +32,8 @@ def goodbye():
     print('Good bye!')
 
 
-def independant():
-    print('I am rather independant...')
+def independent():
+    print('I am rather independent...')
 
 
 def test():
