@@ -13,10 +13,9 @@ from . import runner
 
 STATUSES = {
     'pending': None,
-    'ready': 1,
-    'running': 2,
+    'running': 1,
     'success': 0,
-    'error': 3
+    'error': 2
 }
 
 
