@@ -130,12 +130,11 @@ class Workflow(object):
         self.active = True
         while self.active:
             runs = self.get_runs()
-            run_ids = self.sort_task(runs.keys())
             runs_started = []
             runs_terminated = []
             keep_running = False
 
-            for task_id in run_ids:
+            for task_id in self.sort_task(runs.keys()):
                 run = runs[task_id]
                 task = self.tasks[task_id]
 
