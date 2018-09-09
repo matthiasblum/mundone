@@ -111,7 +111,7 @@ class Workflow(object):
 
         return _tasks
 
-    def run(self, tasks=[], secs=60, dependencies=True, resume=False, dry=False, resubmit=False):
+    def run(self, tasks=[], secs=60, dependencies=True, resume=False, dry=False, resubmit=0):
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("run() arg 1 must be a list or a tuple")
 
@@ -126,6 +126,8 @@ class Workflow(object):
             for task_id in to_run:
                 logger.info('    * {}'.format(self.tasks[task_id].name))
             return
+
+        to_run = {task_id: resubmit for task_id in to_run}
 
         self.active = True
         while self.active:
@@ -143,9 +145,11 @@ class Workflow(object):
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
                             run['status'] = task.status
-                        elif resubmit:
+                        elif to_run.get(task_id, 0) > 0:
+                            # Failed but will resubmit task
                             logger.info("'{}' has failed".format(task))
                             run['status'] = STATUSES['pending']
+                            to_run[task_id] -= 1
                         else:
                             logger.info("'{}' has failed".format(task))
                             run['status'] = task.status
@@ -177,12 +181,11 @@ class Workflow(object):
 
                     if flag & 1:
                         # Cannot submit task because at least one dependency failed
-                        if not resubmit:
-                            # Dependency will not be resubmitted: flag this task as failed
-                            runs_terminated.append((
-                                task_id, STATUSES['error'],
-                                None, None, None, False
-                            ))
+                        # Flag this task as failed
+                        runs_terminated.append((
+                            task_id, STATUSES['error'],
+                            None, None, None, False
+                        ))
                     elif flag & 2:
                         # One or more dependencies pending/running
                         continue
