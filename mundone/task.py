@@ -143,6 +143,8 @@ class Task(object):
         self._output = None
         self.stdout = None
         self.stderr = None
+        self._start_time = None
+        self._end_time = None
 
         self.pack(workdir)
 
