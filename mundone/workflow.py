@@ -5,13 +5,16 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime
 
+from mundone import __version__
 from .logger import logger, Notification
 from .task import STATUSES, Task
 
 
 class Workflow(object):
     def __init__(self, tasks, **kwargs):
+        self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
         if not isinstance(self.id, str):
             raise ValueError("'id' expects a str")
@@ -113,6 +116,8 @@ class Workflow(object):
                 logger.info('    * {}'.format(task_name))
             return
 
+        start_time = datetime.now()
+
         # Number of tries per task
         tries = {task_name: 0 for task_name in to_run}
 
@@ -183,7 +188,7 @@ class Workflow(object):
                         # All dependencies done but one or more failed:
                         # Cannot start this task, hence flag it as failed
                         self.tasks[task_name].update(status=STATUSES['error'])
-                        tasks_done.append((tasks_done, False))
+                        tasks_done.append((task_name, False))
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
@@ -225,35 +230,45 @@ class Workflow(object):
             success = True
 
         if self.email:
-            name_col_len = max(map(len, to_run)) + 4
-            status_col_len = max(
-                map(
-                    len,
-                    [
-                        self.tasks[task_name].get_status()
-                        for task_name in to_run
-                    ]
+            if self.name:
+                subject = "[{}] Workflow completion notification: {}".format(
+                    self.name,
+                    "success" if success else "error"
                 )
-            ) + 4
+            else:
+                subject = "Workflow completion notification: {}".format(
+                    "success" if success else "error"
+                )
 
-            msg = "{:<{}}{:<{}}{:<24}{:<24}{:<24}\n".format(
-                "Task", name_col_len, "Status", status_col_len,
-                "Submitted", "Started", "Completed"
-            )
-            msg += '-' * (len(msg)-1) + '\n'
+            table = [
+                ("Task", "Status", "Submitted", "Started", "Completed")
+            ]
             for task_name in to_run:
                 task = self.tasks[task_name]
                 times = [task.submit_time, task.start_time, task.end_time]
-                msg += "{:<{}}{:<{}}{:<24}{:<24}{:<24}\n".format(
+                table.append((
                     task_name,
-                    name_col_len,
                     task.get_status(),
-                    status_col_len,
                     *['' if t is None else t for t in times]
-                )
+                ))
+
+            msg = format_table(table, has_header=True)
+            msg += "\n\n"
+
+            table = [
+                ("Launch time", start_time.strftime("%d %b %Y %H:%M:%S")),
+                ("Ending time", datetime.now().strftime("%d %b %Y %H:%M:%S")),
+                ("Working directory", self.workdir),
+                ("Job database", self.database),
+                ("User", os.getlogin()),
+                ("Host", os.uname().nodename),
+                ("Mundone version", __version__)
+            ]
+
+            msg += format_table(table)
 
             self.email.send(
-                subject="Workflow completion notification",
+                subject=subject,
                 content=msg,
                 to_addrs=self.email_to
             )
@@ -545,3 +560,24 @@ class Workflow(object):
 
         self.update_runs([], runs_terminated)
         self.active = False
+
+
+def format_table(table, has_header=False, margin=4):
+    lengths = [0] * len(table[0])
+    for row in table:
+        for i, col in enumerate(row):
+            if len(col) > lengths[i]:
+                lengths[i] = len(col)
+
+    lengths = [l + margin for l in lengths]
+
+    content = ""
+    for i, row in enumerate(table):
+        line = ''.join(["{{:<{}}}".format(col) for col in lengths])
+        line = line.format(*row)
+        content += line + "\n"
+
+        if not i and has_header:
+            content += '-' * len(line) + "\n"
+
+    return content
