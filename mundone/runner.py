@@ -5,6 +5,7 @@ import importlib
 import pickle
 import struct
 import sys
+from datetime import datetime
 
 
 def main():
@@ -21,6 +22,8 @@ def main():
 
         fn, args, kwargs = pickle.loads(fh.read())
 
+    start_time = datetime.now()
+
     try:
         result = fn(*args, **kwargs)
     except Exception as e:
@@ -32,7 +35,7 @@ def main():
         returncode = 0
 
     with open(dst, "wb") as fh:
-        pickle.dump((result, returncode), fh)
+        pickle.dump((result, returncode, start_time, datetime.now()), fh)
 
     exit(returncode)
 
