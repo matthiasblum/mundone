@@ -2,24 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import json
-import logging
 import os
 import sqlite3
 import time
 
+from .logger import logger
 from .task import STATUSES, Task
-
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-ch = logging.StreamHandler()
-ch.setFormatter(
-    logging.Formatter(
-        fmt='%(asctime)s: %(message)s',
-        datefmt='%y-%m-%d %H:%M:%S'
-    )
-)
-logger.addHandler(ch)
 
 
 class Workflow(object):
