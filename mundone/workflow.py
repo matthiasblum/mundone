@@ -6,7 +6,7 @@ import os
 import sqlite3
 import time
 
-from .logger import logger
+from .logger import logger, Notification
 from .task import STATUSES, Task
 
 
@@ -43,6 +43,16 @@ class Workflow(object):
             raise TypeError("Workflow() arg 1 expects a sequence of Task objects")
         elif len(tasks) != len(set([t.name for t in tasks])):
             raise RuntimeError("One or more tasks with the same name")
+
+        email = kwargs.get("mail")
+        if isinstance(email, dict):
+            self.email = Notification(
+                smtp_host=email["host"],
+                smtp_user=email["user"],
+                smtp_port=email.get("port", 475)
+            )
+        else:
+            self.email = Notification
 
         self.tasks = {t.name: t for t in tasks}
         self.init_database()
