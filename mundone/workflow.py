@@ -227,8 +227,10 @@ class Workflow(object):
             logger.error("workflow could not complete "
                          "because one or more tasks failed: "
                          "{}".format(', '.join(failures)))
+            return False
         else:
             logger.info("workflow completed successfully")
+            return True
 
     def update_runs(self, runs_started, runs_terminated):
         with sqlite3.connect(self.database) as con:
