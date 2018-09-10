@@ -220,7 +220,7 @@ class Task(object):
             except FileNotFoundError:
                 pass
 
-    def collect(self):
+    def _collect(self):
         if self.log_files:
             out, err = self.log_files
             out.close()
@@ -240,7 +240,7 @@ class Task(object):
         self.clean()
 
     @staticmethod
-    def collect_run(output_file):
+    def collect(output_file):
         basepath = output_file[:-6]
         input_file = basepath + ".in.p"
         stderr_file = basepath + ".err"
@@ -267,7 +267,7 @@ class Task(object):
             if returncode is None:
                 self.status = STATUSES['running']
             else:
-                self.collect()
+                self._collect()
                 self.proc = None
                 self.status = STATUSES['success'] if returncode == 0 else STATUSES['error']
         elif self.job_id is not None:
@@ -283,17 +283,31 @@ class Task(object):
                     # PEND == pending on the cluster, but we submitted the task so we want it to run
                     self.status = STATUSES['running']
                 else:
-                    self.collect()
+                    self._collect()
                     self.job_id = None
                     self.status = STATUSES['success'] if status == "DONE" else STATUSES['error']
 
         return self.status
 
-    def update(self, status, output, stdout, stderr):
-        self.status = status
-        self._output = output
-        self.stdout = stdout
-        self.stderr = stderr
+    def update(self, **kwargs):
+        if kwargs.get("status") is not None:
+            self.status = kwargs["status"]
+
+        if kwargs.get("output") is not None:
+            self._output = kwargs["output"]
+
+        if kwargs.get("stdout") is not None:
+            self.stdout = kwargs["stdout"]
+
+        if kwargs.get("stderr") is not None:
+            self.stderr = kwargs["stderr"]
+
+        if kwargs.get("input_file") is not None:
+            self.input_f = kwargs["input_file"]
+
+        if kwargs.get("output_file") is not None:
+            self.output_f = kwargs["output_file"]
+
         self.proc = self.job_id = None
 
     @property
@@ -312,6 +326,15 @@ class Task(object):
     @property
     def output(self):
         return TaskOutput(self)
+
+    @property
+    def pid(self):
+        if self.proc is not None:
+            return self.proc.pid
+        elif self.job_id is not None:
+            return -self.job_id
+        else:
+            return None
 
 
 class TaskOutput(object):

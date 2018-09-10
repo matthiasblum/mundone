@@ -53,8 +53,11 @@ class Workflow(object):
             raise ValueError("Workflow() arg 1 cannot be empty")
         elif not all([isinstance(task, Task) for task in tasks]):
             raise TypeError("Workflow() arg 1 expects a sequence of Task objects")
+        elif len(tasks) != len(set([t.name for t in tasks])):
+            raise RuntimeError("One or more tasks with the same name")
 
-        self.tasks = self.init_database(tasks)
+        self.tasks = {t.name: t for t in tasks}
+        self.init_database()
         self.active = True
 
     @staticmethod
@@ -62,28 +65,18 @@ class Workflow(object):
         with open(database, "rb") as fh:
             return fh.read(16).decode() == "SQLite format 3\x00"
 
-    def init_database(self, tasks):
-        if len(tasks) != len(set([t.name for t in tasks])):
-            raise RuntimeError("One or more tasks with the same name")
-
+    def init_database(self):
         with sqlite3.connect(self.database) as con:
             cur = con.cursor()
 
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS task (
-                  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                  name TEXT NOT NULL UNIQUE
-                )
-                """
-            )
-
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS task_run (
-                  task_id INTEGER NOT NULL,
+                  pid INTEGER DEFAULT NULL,
+                  name TEXT NOT NULL,
                   workflow_id TEXT NOT NULL DEFAULT '1',
                   active INTEGER NOT NULL DEFAULT 1,
+                  locked INTEGER NOT NULL DEFAULT 0,
                   status INTEGER DEFAULT NULL,
                   input_file TEXT DEFAULT NULL,
                   output_file TEXT DEFAULT NULL,
@@ -92,29 +85,12 @@ class Workflow(object):
                   stderr TEXT DEFAULT NULL,
                   create_time TEXT NOT NULL,
                   start_time TEXT DEFAULT NULL,
-                  end_time TEXT DEFAULT NULL,
-                  FOREIGN KEY(task_id) REFERENCES task(id)
+                  end_time TEXT DEFAULT NULL
                 )
                 """
             )
 
-            cur.execute("SELECT id, name FROM task")
-            existing_tasks = {name: task_id for task_id, name in cur}
-            _tasks = {}
-
-            # Add new tasks
-            for task in tasks:
-                if task.name in existing_tasks:
-                    task_id = existing_tasks[task.name]
-                else:
-                    cur.execute("INSERT INTO task (name) VALUES (?)", (task.name,))
-                    task_id = cur.lastrowid
-
-                _tasks[task_id] = task
-
             cur.close()
-
-        return _tasks
 
     def run(self, tasks=[], **kwargs):
         secs = kwargs.get("secs", 60)
@@ -126,55 +102,63 @@ class Workflow(object):
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("run() arg 1 must be a list or a tuple")
 
-        task_names = {task.name: task_id for task_id, task in self.tasks.items()}
         for task_name in tasks:
-            if task_name not in task_names:
+            if task_name not in self.tasks:
                 raise RuntimeError("invalid task name: '{}'".format(task_name))
 
         to_run = self.register_runs(tasks, dependencies, resume, dry)
         if dry:
             logger.info('tasks to run:')
-            for task_id in to_run:
-                logger.info('    * {}'.format(self.tasks[task_id].name))
+            for task_name in to_run:
+                logger.info('    * {}'.format(task_name))
             return
 
-        to_run = {task_id: resubmit for task_id in to_run}
+        # Number of tries per task
+        tries = {task_name: 0 for task_name in to_run}
+
+        # Whether or not the status has been logged
+        to_run = {task_name: False for task_name in to_run}
 
         self.active = True
         failures = []
         while self.active:
-            runs = self.get_runs()
-            runs_started = []
-            runs_terminated = []
+            tasks_started = []
+            tasks_done = []
             keep_running = False
 
-            for task_id in self.sort_task(runs.keys()):
-                run = runs[task_id]
-                task = self.tasks[task_id]
+            for task_name in to_run:
+                run = self.acquire_run(task_name, lock=True)
+                task = self.tasks[task_name]
 
                 if run['status'] == STATUSES['running']:
-                    if task.is_terminated():
+                    # task flagged as running in the DB, is it still the case?
+
+                    if task.pid != run["pid"]:
+                        # Not the same job ID: task being run by another workflow instance
+                        keep_running = True
+                    elif task.is_terminated():
+                        # Completed
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
                             run['status'] = task.status
                             _resubmit = False
-                        elif to_run.get(task_id, 0) > 0:
+                        elif tries[task_name] < resubmit:
                             # Failed but will resubmit task
                             logger.error("'{}' has failed".format(task))
                             run['status'] = STATUSES['pending']
-                            to_run[task_id] -= 1
                             _resubmit = True
                         else:
                             logger.error("'{}' has failed".format(task))
                             run['status'] = task.status
                             _resubmit = False
-                            failures.append(task)
+                            failures.append(task.name)
 
-                        runs_terminated.append((
-                            task_id, task.status,
+                        tasks_done.append((
+                            task_name, task.status,
                             task.output.read(), task.stdout, task.stderr,
                             _resubmit
                         ))
+                        to_run[task_name] = True  # logged
                     else:
                         keep_running = True
                 elif run['status'] == STATUSES['pending']:
@@ -187,13 +171,15 @@ class Workflow(object):
                         deps = task.inputs - task.requires
 
                     for dep_name in deps:
-                        dep_id = task_names[dep_name]
-                        dep_run = runs[dep_id]
+                        dep_run = self.acquire_run(dep_name, lock=False)
 
                         if dep_run['status'] == STATUSES['error']:
                             flag |= 1
                         elif dep_run['status'] != STATUSES['success']:
                             flag |= 2
+                        elif dep_name in failures:
+                            # dependencies failed, but then completed successfully
+                            failures.remove(dep_name)
 
                     if flag & 2:
                         # One or more dependencies pending/running
@@ -201,19 +187,35 @@ class Workflow(object):
                     elif flag & 1:
                         # All dependencies done but one or more failed:
                         # Cannot start this task, hence flag it as failed
-                        runs_terminated.append((
-                            task_id, STATUSES['error'],
+                        tasks_done.append((
+                            task_name, STATUSES['error'],
                             None, None, None, False
                         ))
-                        failures.append(task)
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
                         task.run(self.workdir)
-                        runs_started.append((task_id, task.input_f, task.output_f))
+                        tasks_started.append(
+                            (task.pid, task_name, task.input_f, task.output_f)
+                        )
+                        tries[task_name] += 1
+                elif not to_run[task_name]:
+                    # Completed (either success or error) and not logged
 
-            if runs_started or runs_terminated:
-                self.update_runs(runs_started, runs_terminated)
+                    # Update the task
+                    task.update(status=run['status'], output=run['output'],
+                                stdout=run['stdout'], stderr=run['stderr'])
+
+                    if run['status'] == STATUSES['success']:
+                        logger.info("'{}' has been completed".format(task))
+                    else:
+                        logger.error("'{}' has failed".format(task))
+
+                    to_run[task_name] = True
+
+                self.release_run(task_name)
+
+            self.update_runs(tasks_started, tasks_done)
 
             if secs:
                 self.active = keep_running
@@ -222,183 +224,201 @@ class Workflow(object):
                 break
 
         if failures:
-            logger.error("workflow could not complete because one or more taks failed: {}".format(', '.join(failures)))
+            logger.error("workflow could not complete "
+                         "because one or more tasks failed: "
+                         "{}".format(', '.join(failures)))
         else:
             logger.info("workflow completed successfully")
 
     def update_runs(self, runs_started, runs_terminated):
         with sqlite3.connect(self.database) as con:
             cur = con.cursor()
-            for task_id, input_file, output_file in runs_started:
+            for pid, task_name, input_file, output_file in runs_started:
                 cur.execute(
                     """
-                    UPDATE task_run
+                    UPDATE task
                     SET
+                      pid = ?,
                       status = ?,
                       input_file = ?,
                       output_file = ?,
                       start_time = strftime('%Y-%m-%d %H:%M:%S')
-                    WHERE task_id = ? AND active = 1
+                    WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (STATUSES['running'], input_file, output_file, task_id)
+                    (pid, STATUSES['running'],
+                     input_file, output_file, task_name, self.id)
                 )
 
             new_runs = []
             for run in runs_terminated:
-                task_id, status, output, stdout, stderr, resubmit = run
+                task_name, status, output, stdout, stderr, resubmit = run
                 cur.execute(
                     """
-                    UPDATE task_run
+                    UPDATE task
                     SET
                       status = ?,
                       output = ?,
                       stdout = ?,
                       stderr = ?,
                       end_time = strftime('%Y-%m-%d %H:%M:%S')
-                    WHERE task_id = ? AND active = 1
+                    WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (status, json.dumps(output), stdout, stderr, task_id)
+                    (status, json.dumps(output), stdout, stderr, task_name, self.id)
                 )
 
                 if status == STATUSES['error'] and resubmit:
-                    new_runs.append(task_id)
+                    new_runs.append(task_name)
 
             if new_runs:
                 cur.execute(
                     """
-                    UPDATE task_run
+                    UPDATE task
                     SET active = 0
-                    WHERE task_id in ({})
+                    WHERE name in ({}) AND workflow_id = ?
                     """.format(','.join(['?' for _ in new_runs])),
-                    new_runs
+                    tuple(new_runs) + (self.id,)
                 )
 
                 cur.executemany(
                     """
-                    INSERT INTO task_run (task_id, create_time)
-                    VALUES (?, strftime('%Y-%m-%d %H:%M:%S'))
+                    INSERT INTO task (name, workflow_id, create_time)
+                    VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S'))
                     """,
-                    ((task_id,) for task_id in new_runs)
+                    ((task_name, self.id) for task_name in new_runs)
                 )
 
             cur.close()
 
-    def get_runs(self):
-        runs = {}
-
+    def acquire_run(self, task_name, lock=False):
         with sqlite3.connect(self.database) as con:
             cur = con.cursor()
             cur.execute(
                 """
-                SELECT task_id, status, output
-                FROM task_run
-                WHERE active = 1 AND workflow_id = ?
+                SELECT pid, status, output, stdout, stderr, input_file, output_file
+                FROM task
+                WHERE active = 1 AND workflow_id = ? AND name = ?
                 """,
-                (self.id,)
+                (self.id, task_name)
             )
 
-            for task_id, status, output in cur:
-                if output is not None:
-                    output = json.loads(output)
+            run = dict(zip(
+                ("pid", "status", "output", "stdout",
+                 "stderr", "input_file", "output_file"),
+                cur.fetchone()
+            ))
 
-                runs[task_id] = {
-                    "status": status,
-                    "output": output
-                }
-
+            if lock:
+                cur.execute(
+                    """
+                    UPDATE task
+                    SET locked = 1
+                    WHERE active = 1 AND workflow_id = ? AND name = ?
+                    """,
+                    (self.id, task_name)
+                )
             cur.close()
-        return runs
+        return run
+
+    def release_run(self, task_name):
+        with sqlite3.connect(self.database) as con:
+            cur = con.cursor()
+            cur.execute(
+                """
+                UPDATE task
+                SET locked = 0
+                WHERE active = 1 AND workflow_id = ? AND name = ?
+                """,
+                (self.id, task_name)
+            )
+            cur.close()
 
     def register_runs(self, tasks, dependencies=True, resume=False, dry=False):
-        task_names = {task.name: task_id for task_id, task in self.tasks.items()}
-
         con = sqlite3.connect(self.database)
         cur = con.cursor()
         cur.execute(
             """
-            SELECT task_id, status, input_file, output_file
-            FROM task_run
-            WHERE active = 1 AND workflow_id = ?
+            SELECT name, status, locked, input_file, output_file
+            FROM task
+            WHERE active = 1 AND workflow_id = ? 
             """,
             (self.id,)
         )
 
         tasks_success = set()
-        tasks_error = set()
         tasks_running = set()
-        runs_done = []
-        runs_pending = set()
-        for task_id, status, input_file, output_file in cur:
-            if status == STATUSES['success']:
+        tasks_pending = set()
+        tasks_update = []
+        for task_name, status, locked, input_file, output_file in cur:
+            if task_name not in self.tasks:
+                continue  # todo: error message
+            elif status == STATUSES['success']:
                 # Task completed successfully: tasks depending on this one can run
-                tasks_success.add(task_id)
+                tasks_success.add(task_name)
             elif status == STATUSES['running']:
                 # Flagged as running in the database
-                if os.path.isfile(output_file):
+                if os.path.isfile(output_file) and not locked:
                     # But the output file exists!
-                    returncode, output, stdout, stderr = Task.collect_run(output_file)
-                    if returncode == STATUSES['success']:
-                        tasks_success.add(task_id)
-                    else:
-                        tasks_error.add(task_id)
-                    task = self.tasks[task_id]
-                    task.update(returncode, output, stdout, stderr)
-                    runs_done.append((task_id, returncode, output, stdout, stderr))
+                    status, output, stdout, stderr = Task.collect(output_file)
+                    if status == STATUSES['success']:
+                        tasks_success.add(task_name)
+                    task = self.tasks[task_name]
+                    task.update(status=status, output=output,
+                                stdout=stdout, stderr=stderr)
+                    tasks_update.append((task_name, status, output, stdout, stderr))
                 else:
                     # Assume the task is still running
-                    tasks_running.add(task_id)
+                    tasks_running.add(task_name)
             elif status == STATUSES['pending']:
-                runs_pending.add(task_id)
+                tasks_pending.add(task_name)
 
-        # Updated completed runs that were still flagged as running
-        if runs_done:
-            for task_id, returncode, output, stdout, stderr in runs_done:
+        # Updated completed tasks that were still flagged as running
+        if tasks_update:
+            for task_name, returncode, output, stdout, stderr in tasks_update:
                 cur.execute(
                     """
-                    UPDATE task_run
+                    UPDATE task
                     SET
                       status = ?,
                       output = ?,
                       stdout = ?,
                       stderr = ?,
                       end_time = strftime('%Y-%m-%d %H:%M:%S')
-                    WHERE task_id = ? AND active = 1 AND workflow_id = ?
+                    WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (returncode, json.dumps(output), stdout, stderr, task_id, self.id)
+                    (returncode, json.dumps(output),
+                     stdout, stderr, task_name, self.id)
                 )
 
             con.commit()
 
         if tasks:
             # Run only passed tasks
-            to_run = set([task_names[name] for name in tasks])
+            to_run = set(tasks)
             to_lookup = to_run
 
             # Add dependencies
             while True:
                 run_dependencies = set()
 
-                for task_id in to_lookup:
-                    task = self.tasks[task_id]
+                for task_name in to_lookup:
+                    task = self.tasks[task_name]
                     inputs = task.inputs
-                    for name in task.requires:
-                        if name not in task_names:
+                    for dep_name in task.requires:
+                        if dep_name not in self.tasks:
                             raise ValueError("'{}' requires an invalid task: "
-                                             "'{}'".format(task, name))
-
-                        dep_id = task_names[name]
-                        if dep_id == task_id:
+                                             "'{}'".format(task, dep_name))
+                        elif task_name == dep_name:
                             raise ValueError(
                                 "'{}' cannot require itself".format(task)
                             )
-                        if dep_id in tasks_success and resume:
+                        if dep_name in tasks_success and resume:
                             # skip completed dependency
                             continue
-                        elif not dependencies and name not in inputs:
+                        elif not dependencies and dep_name not in inputs:
                             # skip dependency (only if the task does not require the dependency's output)
                             continue
                         else:
-                            run_dependencies.add(dep_id)
+                            run_dependencies.add(dep_name)
 
                 if run_dependencies:
                     to_run |= run_dependencies
@@ -411,36 +431,36 @@ class Workflow(object):
         else:
             # Run all talks...
             to_run = set()
-            for task_id in self.tasks:
-                if task_id in tasks_running:
+            for task_name in self.tasks:
+                if task_name in tasks_running:
                     # ... except those already running
                     continue
-                elif task_id in tasks_success and resume:
+                elif task_name in tasks_success and resume:
                     # ... and those that completed
                     continue
                 else:
-                    to_run.add(task_id)
+                    to_run.add(task_name)
 
         if to_run and not dry:
-            to_run_insert = to_run - runs_pending
+            to_run_insert = to_run - tasks_pending
 
             if to_run_insert:
                 # Update runs
                 cur.execute(
                     """
-                    UPDATE task_run
+                    UPDATE task
                     SET active = 0
-                    WHERE task_id in ({}) AND workflow_id = ?
+                    WHERE name in ({}) AND workflow_id = ?
                     """.format(','.join(['?' for _ in to_run_insert])),
                     tuple(to_run_insert) + (self.id,)
                 )
 
                 cur.executemany(
                     """
-                    INSERT INTO task_run (task_id, workflow_id, create_time)
+                    INSERT INTO task (name, workflow_id, create_time)
                     VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S'))
                     """,
-                    ((task_id, self.id) for task_id in to_run_insert)
+                    ((task_name, self.id) for task_name in to_run_insert)
                 )
 
             con.commit()
@@ -451,36 +471,32 @@ class Workflow(object):
         return self.sort_task(to_run)
 
     def sort_task(self, tasks):
-        task_names = {task.name: task_id for task_id, task in self.tasks.items()}
         tasks = set(tasks)
         ordered = []
         while tasks:
             with_deps = set()
             without_deps = set()
-            for task_id in tasks:
-                for name in self.tasks[task_id].requires:
-                    dep_id = task_names[name]
-                    if dep_id in tasks:
-                        with_deps.add(task_id)
+            for task_name in tasks:
+                for dep_name in self.tasks[task_name].requires:
+                    if dep_name in tasks:
+                        with_deps.add(task_name)
                         break
                 else:
-                    without_deps.add(task_id)
+                    without_deps.add(task_name)
 
             tasks = with_deps
-            ordered += sorted(list(without_deps), key=lambda task_id: self.tasks[task_id].name)
+            ordered += sorted(list(without_deps))
 
         return ordered
 
     def kill(self):
         runs_terminated = []
-        for task_id, task in self.tasks.items():
+        for task_name, task in self.tasks.items():
             if task.is_running():
                 task.kill()
                 runs_terminated.append((
-                    task_id, task.status, None, None, None, False
+                    task_name, task.status, None, None, None, False
                 ))
 
         self.update_runs([], runs_terminated)
-
-    def get_task(self, name):
-        return
+        self.active = False
