@@ -38,10 +38,11 @@ def report():
 
 
 def retry():
-    if os.path.isfile('.mundone_retry'):
-        os.unlink('.mundone_retry')
+    if os.path.isfile('mundone_retry'):
+        os.unlink('mundone_retry')
+        print("Great!")
     else:
-        open('.mundone_retry', 'wt').close()
+        open('mundone_retry', 'wt').close()
         raise FileNotFoundError("Shame...")
 
 
