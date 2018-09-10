@@ -51,8 +51,9 @@ class Workflow(object):
                 smtp_user=email["user"],
                 smtp_port=email.get("port", 475)
             )
+            self.email_to = email.get('to')
         else:
-            self.email = Notification
+            self.email = None
 
         self.tasks = {t.name: t for t in tasks}
         self.init_database()
@@ -82,6 +83,7 @@ class Workflow(object):
                   stdout TEXT DEFAULT NULL,
                   stderr TEXT DEFAULT NULL,
                   create_time TEXT NOT NULL,
+                  submit_time TEXT DEFAULT NULL,
                   start_time TEXT DEFAULT NULL,
                   end_time TEXT DEFAULT NULL
                 )
@@ -151,16 +153,11 @@ class Workflow(object):
                             _resubmit = False
                             failures.append(task.name)
 
-                        tasks_done.append((
-                            task_name, task.status,
-                            task.output.read(), task.stdout, task.stderr,
-                            _resubmit
-                        ))
+                        tasks_done.append((task_name, _resubmit))
                         to_run[task_name] = True  # logged
                     else:
                         keep_running = True
                 elif run['status'] == STATUSES['pending']:
-                    keep_running = True
                     flag = 0
 
                     if dependencies:
@@ -181,22 +178,19 @@ class Workflow(object):
 
                     if flag & 2:
                         # One or more dependencies pending/running
-                        continue
+                        keep_running = True
                     elif flag & 1:
                         # All dependencies done but one or more failed:
                         # Cannot start this task, hence flag it as failed
-                        tasks_done.append((
-                            task_name, STATUSES['error'],
-                            None, None, None, False
-                        ))
+                        self.tasks[task_name].update(status=STATUSES['error'])
+                        tasks_done.append((tasks_done, False))
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
                         task.run(self.workdir)
-                        tasks_started.append(
-                            (task.pid, task_name, task.input_f, task.output_f)
-                        )
+                        tasks_started.append(task_name)
                         tries[task_name] += 1
+                        keep_running = True
                 elif not to_run[task_name]:
                     # Completed (either success or error) and not logged
 
@@ -225,15 +219,53 @@ class Workflow(object):
             logger.error("workflow could not complete "
                          "because one or more tasks failed: "
                          "{}".format(', '.join(failures)))
-            return False
+            success = False
         else:
             logger.info("workflow completed successfully")
-            return True
+            success = True
+
+        if self.email:
+            name_col_len = max(map(len, to_run)) + 4
+            status_col_len = max(
+                map(
+                    len,
+                    [
+                        self.tasks[task_name].get_status()
+                        for task_name in to_run
+                    ]
+                )
+            ) + 4
+
+            msg = "{:<{}}{:<{}}{:<24}{:<24}{:<24}\n".format(
+                "Task", name_col_len, "Status", status_col_len,
+                "Submitted", "Started", "Completed"
+            )
+            msg += '-' * (len(msg)-1) + '\n'
+            for task_name in to_run:
+                task = self.tasks[task_name]
+                times = [task.submit_time, task.start_time, task.end_time]
+                msg += "{:<{}}{:<{}}{:<24}{:<24}{:<24}\n".format(
+                    task_name,
+                    name_col_len,
+                    task.get_status(),
+                    status_col_len,
+                    *['' if t is None else t for t in times]
+                )
+
+            self.email.send(
+                subject="Workflow completion notification",
+                content=msg,
+                to_addrs=self.email_to
+            )
+
+        return success
 
     def update_runs(self, runs_started, runs_terminated):
         with sqlite3.connect(self.database) as con:
             cur = con.cursor()
-            for pid, task_name, input_file, output_file in runs_started:
+            for task_name in runs_started:
+                # for pid, task_name, input_file, output_file in runs_started:
+                task = self.tasks[task_name]
                 cur.execute(
                     """
                     UPDATE task
@@ -242,16 +274,17 @@ class Workflow(object):
                       status = ?,
                       input_file = ?,
                       output_file = ?,
-                      start_time = strftime('%Y-%m-%d %H:%M:%S')
+                      submit_time = ?
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (pid, STATUSES['running'],
-                     input_file, output_file, task_name, self.id)
+                    (task.pid, STATUSES['running'],
+                     task.input_f, task.output_f,
+                     task.submit_time, task_name, self.id)
                 )
 
             new_runs = []
-            for run in runs_terminated:
-                task_name, status, output, stdout, stderr, resubmit = run
+            for task_name, resubmit in runs_terminated:
+                task = self.tasks[task_name]
                 cur.execute(
                     """
                     UPDATE task
@@ -260,13 +293,16 @@ class Workflow(object):
                       output = ?,
                       stdout = ?,
                       stderr = ?,
-                      end_time = strftime('%Y-%m-%d %H:%M:%S')
+                      start_time = ?,
+                      end_time = ?
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (status, json.dumps(output), stdout, stderr, task_name, self.id)
+                    (task.status, json.dumps(task.output.read()),
+                     task.stdout, task.stderr, task.start_time,
+                     task.end_time, task_name, self.id)
                 )
 
-                if status == STATUSES['error'] and resubmit:
+                if task.status == STATUSES['error'] and resubmit:
                     new_runs.append(task_name)
 
             if new_runs:
@@ -294,7 +330,9 @@ class Workflow(object):
             cur = con.cursor()
             cur.execute(
                 """
-                SELECT pid, status, output, stdout, stderr, input_file, output_file
+                SELECT 
+                  pid, status, output, stdout, stderr, 
+                  input_file, output_file, start_time, end_time
                 FROM task
                 WHERE active = 1 AND workflow_id = ? AND name = ?
                 """,
@@ -303,7 +341,8 @@ class Workflow(object):
 
             run = dict(zip(
                 ("pid", "status", "output", "stdout",
-                 "stderr", "input_file", "output_file"),
+                 "stderr", "input_file", "output_file",
+                 "start_time", "end_time"),
                 cur.fetchone()
             ))
 
@@ -358,13 +397,18 @@ class Workflow(object):
                 # Flagged as running in the database
                 if os.path.isfile(output_file) and not locked:
                     # But the output file exists!
-                    status, output, stdout, stderr = Task.collect(output_file)
+                    (status, output,
+                     stdout, stderr,
+                     start_time, end_time) = Task.collect(output_file)
+
                     if status == STATUSES['success']:
                         tasks_success.add(task_name)
+
                     task = self.tasks[task_name]
                     task.update(status=status, output=output,
-                                stdout=stdout, stderr=stderr)
-                    tasks_update.append((task_name, status, output, stdout, stderr))
+                                stdout=stdout, stderr=stderr,
+                                start_time=start_time, end_time=end_time)
+                    tasks_update.append(task_name)
                 else:
                     # Assume the task is still running
                     tasks_running.add(task_name)
@@ -373,7 +417,8 @@ class Workflow(object):
 
         # Updated completed tasks that were still flagged as running
         if tasks_update:
-            for task_name, returncode, output, stdout, stderr in tasks_update:
+            for task_name in tasks_update:
+                task = self.tasks[task_name]
                 cur.execute(
                     """
                     UPDATE task
@@ -382,11 +427,13 @@ class Workflow(object):
                       output = ?,
                       stdout = ?,
                       stderr = ?,
-                      end_time = strftime('%Y-%m-%d %H:%M:%S')
+                      start_time = ?,
+                      end_time = ?
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (returncode, json.dumps(output),
-                     stdout, stderr, task_name, self.id)
+                    (task.status, json.dumps(task.output.read()),
+                     task.stdout, task.stderr, task.start_time,
+                     task.end_time, task_name, self.id)
                 )
 
             con.commit()
@@ -494,9 +541,7 @@ class Workflow(object):
         for task_name, task in self.tasks.items():
             if task.is_running():
                 task.kill()
-                runs_terminated.append((
-                    task_name, task.status, None, None, None, False
-                ))
+                runs_terminated.append((task_name, False))
 
         self.update_runs([], runs_terminated)
         self.active = False
