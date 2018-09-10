@@ -7,6 +7,7 @@ import pickle
 import struct
 import tempfile
 import sys
+from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
 
 from . import runner
@@ -55,6 +56,10 @@ class Task(object):
         self.stdout = None
         self.stderr = None
         self._output = None
+
+        self._submit_time = None
+        self._start_time = None
+        self._end_time = None
 
         if isinstance(kwargs.get("scheduler"), dict):
             self.scheduler = kwargs["scheduler"]
@@ -135,11 +140,16 @@ class Task(object):
         if not self.ready():
             return
 
+        self._output = None
+        self.stdout = None
+        self.stderr = None
+
         self.pack(workdir)
 
         basepath = self.input_f[:-5]
         self.stdout_f = basepath + ".out"
         self.stderr_f = basepath + ".err"
+        self._submit_time = datetime.now()
 
         if self.scheduler:
             cmd = ["bsub", "-J", self.name]
@@ -235,7 +245,8 @@ class Task(object):
 
         with open(self.output_f, 'rb') as fh:
             # todo: use returncode to confirm status found by `ping()`
-            self._output, returncode = pickle.load(fh)
+            (self._output, returncode,
+             self._start_time, self._end_time) = pickle.load(fh)
 
         self.clean()
 
@@ -253,12 +264,12 @@ class Task(object):
             stdout = fh.read()
 
         with open(output_file, 'rb') as fh:
-            output, returncode = pickle.load(fh)
+            output, returncode, start_time, end_time = pickle.load(fh)
 
         for f in (input_file, output_file, stderr_file, stdout_file):
             os.unlink(f)
 
-        return returncode, output, stdout, stderr
+        return returncode, output, stdout, stderr, start_time, end_time
 
     def ping(self):
         if self.proc is not None:
@@ -290,25 +301,52 @@ class Task(object):
         return self.status
 
     def update(self, **kwargs):
-        if kwargs.get("status") is not None:
+        try:
             self.status = kwargs["status"]
+        except KeyError:
+            pass
 
-        if kwargs.get("output") is not None:
+        try:
             self._output = kwargs["output"]
+        except KeyError:
+            pass
 
-        if kwargs.get("stdout") is not None:
+        try:
             self.stdout = kwargs["stdout"]
+        except KeyError:
+            pass
 
-        if kwargs.get("stderr") is not None:
+        try:
             self.stderr = kwargs["stderr"]
+        except KeyError:
+            pass
 
-        if kwargs.get("input_file") is not None:
+        try:
             self.input_f = kwargs["input_file"]
+        except KeyError:
+            pass
 
-        if kwargs.get("output_file") is not None:
+        try:
             self.output_f = kwargs["output_file"]
+        except KeyError:
+            pass
+
+        try:
+            self._start_time = kwargs["start_time"]
+        except KeyError:
+            pass
+
+        try:
+            self._end_time = kwargs["end_time"]
+        except KeyError:
+            pass
 
         self.proc = self.job_id = None
+
+    def get_status(self):
+        for k, v in STATUSES.items():
+            if self.status == v:
+                return k
 
     @property
     def inputs(self):
@@ -333,6 +371,27 @@ class Task(object):
             return self.proc.pid
         elif self.job_id is not None:
             return -self.job_id
+        else:
+            return None
+
+    @property
+    def start_time(self):
+        if self._start_time:
+            return self._start_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return None
+
+    @property
+    def end_time(self):
+        if self._end_time:
+            return self._end_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return None
+
+    @property
+    def submit_time(self):
+        if self._submit_time:
+            return self._submit_time.strftime("%Y-%m-%d %H:%M:%S")
         else:
             return None
 
