@@ -61,8 +61,11 @@ class Task(object):
         self._start_time = None
         self._end_time = None
 
-        if isinstance(kwargs.get("scheduler"), dict):
-            self.scheduler = kwargs["scheduler"]
+        if kwargs.get("scheduler"):
+            if isinstance(kwargs["scheduler"], dict):
+                self.scheduler = kwargs["scheduler"]
+            else:
+                self.scheduler = {}
         else:
             self.scheduler = None
 
@@ -153,7 +156,7 @@ class Task(object):
         self.stderr_f = basepath + ".err"
         self._submit_time = datetime.now()
 
-        if self.scheduler:
+        if isinstance(self.scheduler, dict):
             cmd = ["bsub", "-J", self.name]
 
             if isinstance(self.scheduler.get("queue"), str):
