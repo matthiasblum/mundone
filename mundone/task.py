@@ -31,19 +31,19 @@ def mktemp(prefix=None, suffix=None, dir=None, isdir=False):
 
 
 class Task(object):
-    def __init__(self, fn, fn_args=[], fn_kwargs={}, **kwargs):
+    def __init__(self, fn, args=[], kwargs={}, **_kwargs):
         if not callable(fn):
             raise TypeError("'{}' is not callable".format(fn))
-        elif not isinstance(fn_args, (list, tuple)):
+        elif not isinstance(args, (list, tuple)):
             raise TypeError("Task() arg 2 must be a list or a tuple")
-        elif not isinstance(fn_kwargs, dict):
+        elif not isinstance(kwargs, dict):
             raise TypeError("Task() arg 3 must be a dict")
 
         self.fn = fn
-        self.args = fn_args
-        self.kwargs = fn_kwargs
+        self.args = args
+        self.kwargs = kwargs
 
-        self.name = kwargs.get('name', fn.__name__)
+        self.name = _kwargs.get('name', fn.__name__)
         self.status = STATUSES['pending']
         self.proc = None
         self.job_id = None
@@ -61,7 +61,7 @@ class Task(object):
         self._start_time = None
         self._end_time = None
 
-        if kwargs.get("scheduler"):
+        if _kwargs.get("scheduler"):
             if isinstance(kwargs["scheduler"], dict):
                 self.scheduler = kwargs["scheduler"]
             else:
@@ -69,7 +69,7 @@ class Task(object):
         else:
             self.scheduler = None
 
-        if isinstance(kwargs.get("requires"), (tuple, list)):
+        if isinstance(_kwargs.get("requires"), (tuple, list)):
             requires = set()
             for dep in set(kwargs["requires"]):
                 if isinstance(dep, Task):
