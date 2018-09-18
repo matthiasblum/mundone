@@ -62,8 +62,8 @@ class Task(object):
         self._end_time = None
 
         if _kwargs.get("scheduler"):
-            if isinstance(kwargs["scheduler"], dict):
-                self.scheduler = kwargs["scheduler"]
+            if isinstance(_kwargs["scheduler"], dict):
+                self.scheduler = _kwargs["scheduler"]
             else:
                 self.scheduler = {}
         else:
@@ -71,7 +71,7 @@ class Task(object):
 
         if isinstance(_kwargs.get("requires"), (tuple, list)):
             requires = set()
-            for dep in set(kwargs["requires"]):
+            for dep in set(_kwargs["requires"]):
                 if isinstance(dep, Task):
                     requires.add(dep.name)
                 else:
