@@ -96,10 +96,15 @@ class Workflow(object):
             cur.close()
 
     def run(self, tasks=[], **kwargs):
+        # if 0: collect completed tasks and quit
         secs = kwargs.get("secs", 60)
+        # whether or not run dependencies (even if not explicitly called)
         dependencies = kwargs.get("dependencies", True)
+        # whether or not skip already completed tasks
         resume = kwargs.get("resume", False)
+        # whether or not showing what is going to run and quit
         dry = kwargs.get("dry", False)
+        # max times a task is resubmitted if it fails
         resubmit = kwargs.get("resubmit", 0)
 
         if not isinstance(tasks, (list, tuple)):
