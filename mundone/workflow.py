@@ -2,14 +2,16 @@
 # -*- coding: utf-8 -*-
 
 import json
+import logging
 import os
 import sqlite3
 import time
 import sys
 from datetime import datetime
+from email.message import EmailMessage
+from smtplib import SMTP
 
 from mundone import __version__
-from .logger import logger, Notification
 from .task import STATUSES, Task
 
 
@@ -50,12 +52,14 @@ class Workflow(object):
 
         email = kwargs.get("mail")
         if isinstance(email, dict):
-            self.email = Notification(
-                smtp_host=email["host"],
-                smtp_user=email["user"],
-                smtp_port=email.get("port", 475)
-            )
-            self.email_to = email.get('to')
+            for k in ("host", "user"):
+                try:
+                    email[k]
+                except KeyError:
+                    raise KeyError(
+                        "'mail' excepts the 'host' and 'user' keys"
+                    )
+            self.email = email
         else:
             self.email = None
 
@@ -122,6 +126,7 @@ class Workflow(object):
                 sys.stderr.write("    * {}\n".format(task_name))
             return
 
+        logger = logging.getLogger("mundone")
         start_time = datetime.now()
 
         # Number of tries per task
@@ -258,8 +263,8 @@ class Workflow(object):
                     *['' if t is None else t for t in times]
                 ))
 
-            msg = format_table(table, has_header=True)
-            msg += "\n\n"
+            content = format_table(table, has_header=True)
+            content += "\n\n"
 
             table = [
                 ("Launch time", start_time.strftime("%d %b %Y %H:%M:%S")),
@@ -271,13 +276,25 @@ class Workflow(object):
                 ("Mundone version", __version__)
             ]
 
-            msg += format_table(table)
+            content += format_table(table)
 
-            self.email.send(
-                subject=subject,
-                content=msg,
-                to_addrs=self.email_to
-            )
+            msg = EmailMessage()
+            msg.set_content(content)
+
+            msg['Subject'] = subject
+            msg['From'] = self.email["user"]
+
+            to_addrs = self.email.get("to")
+            if to_addrs and isinstance(to_addrs, (list, tuple)):
+                to_addrs = set(to_addrs)
+                msg['To'] = ','.join(to_addrs)
+            else:
+                msg['To'] = [self.email["user"]]
+
+            host = self.email["host"]
+            port = self.email.get("port", 475)
+            with SMTP(host, port=port) as s:
+                s.send_message(msg)
 
         return success
 
