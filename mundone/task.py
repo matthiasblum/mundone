@@ -360,7 +360,7 @@ class Task(object):
             if isinstance(arg, TaskOutput):
                 names.add(arg.task)
 
-        for key, arg in self.kwargs:
+        for key, arg in self.kwargs.items():
             if isinstance(arg, TaskOutput):
                 names.add(arg.task)
 
