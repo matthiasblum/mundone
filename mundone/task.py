@@ -104,7 +104,8 @@ class Task(object):
 
             p = pickle.dumps((self.fn, self.args, self.kwargs))
 
-            if module.__name__ == "__main__":
+            if module_name == "__main__":
+                module_name = os.path.basename(sys.argv[0]).rsplit('.', 1)[0]
                 p = p.replace(b"c__main__", b"c" + module_name.encode())
 
             fh.write(struct.pack(
