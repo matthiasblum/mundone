@@ -170,7 +170,10 @@ class Task(object):
             else:
                 mem = 100
 
-            cmd += ["-M", "{0}", "-R", "rusage[mem={0}]".format(mem)]
+            cmd += [
+                "-M", "{}M".format(mem),
+                "-R", "rusage[mem={0}M]".format(mem)
+            ]
 
             if isinstance(self.scheduler.get("tmp"), int):
                 cmd += ["-R", "rusage[tmp={}]".format(self.scheduler["tmp"])]
