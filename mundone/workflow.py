@@ -14,6 +14,17 @@ from smtplib import SMTP
 from mundone import __version__
 from .task import STATUSES, Task
 
+logger = logging.getLogger('mundone')
+logger.setLevel(logging.INFO)
+_ch = logging.StreamHandler()
+_ch.setFormatter(
+    logging.Formatter(
+        fmt='%(asctime)s: %(message)s',
+        datefmt='%y-%m-%d %H:%M:%S'
+    )
+)
+logger.addHandler(_ch)
+
 
 class Workflow(object):
     def __init__(self, tasks, **kwargs):
@@ -126,7 +137,6 @@ class Workflow(object):
                 sys.stderr.write("    * {}\n".format(task_name))
             return
 
-        logger = logging.getLogger("mundone")
         start_time = datetime.now()
 
         # Number of tries per task
