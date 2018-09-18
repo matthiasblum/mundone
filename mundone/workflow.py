@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import time
+import sys
 from datetime import datetime
 
 from mundone import __version__
@@ -116,9 +117,9 @@ class Workflow(object):
 
         to_run = self.register_runs(tasks, dependencies, resume, dry)
         if dry:
-            logger.info('tasks to run:')
+            sys.stderr.write("tasks to run:\n")
             for task_name in to_run:
-                logger.info('    * {}'.format(task_name))
+                sys.stderr.write("    * {}\n".format(task_name))
             return
 
         start_time = datetime.now()
