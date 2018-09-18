@@ -294,7 +294,7 @@ class Task(object):
             output = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()[0].strip().decode()
             status = None
             try:
-                status = output.splitline()[1].split()[2]
+                status = output.splitlines()[1].split()[2]
             except IndexError:
                 pass
             finally:
