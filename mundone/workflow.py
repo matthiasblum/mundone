@@ -473,6 +473,7 @@ class Workflow(object):
                             raise ValueError(
                                 "'{}' cannot require itself".format(task)
                             )
+
                         if dep_name in tasks_success and resume:
                             # skip completed dependency
                             continue
