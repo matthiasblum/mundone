@@ -24,6 +24,7 @@ _ch.setFormatter(
     )
 )
 logger.addHandler(_ch)
+logger.propagate = False
 
 
 class Workflow(object):
