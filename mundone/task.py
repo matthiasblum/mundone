@@ -127,7 +127,7 @@ class Task(object):
                 args.append(arg)
 
         kwargs = {}
-        for key, arg in self.kwargs:
+        for key, arg in self.kwargs.items():
             if isinstance(arg, TaskOutput):
                 if arg.ready():
                     kwargs[key] = arg.read()
