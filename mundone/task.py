@@ -173,11 +173,14 @@ class Task(object):
 
             cmd += [
                 "-M", "{}M".format(mem),
-                "-R", "rusage[mem={0}M]".format(mem)
+                "-R", "rusage[mem={}M]".format(mem)
             ]
 
             if isinstance(self.scheduler.get("tmp"), int):
-                cmd += ["-R", "rusage[tmp={}]".format(self.scheduler["tmp"])]
+                cmd += [
+                    "-R",
+                    "rusage[tmp={}M]".format(self.scheduler["tmp"])
+                ]
 
             cmd += ["-o", self.stdout_f, "-e", self.stderr_f]
             cmd += [
