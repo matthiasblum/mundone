@@ -190,7 +190,7 @@ class Workflow(object):
                             logger.info("'{}' has been completed".format(task))
                             run['status'] = task.status
                             _resubmit = False
-                        elif tries[task_name] < resubmit:
+                        elif tries[task_name] <= resubmit:
                             # Failed but will resubmit task
                             logger.error("'{}' has failed".format(task))
                             run['status'] = STATUSES['pending']
