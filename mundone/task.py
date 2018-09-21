@@ -353,7 +353,12 @@ class Task(object):
         except KeyError:
             pass
 
-        self.proc = self.job_id = None
+        try:
+            self.job_id = kwargs["job_id"]
+        except KeyError:
+            self.job_id = None
+        finally:
+            self.proc = None
 
     def get_status(self):
         for k, v in STATUSES.items():

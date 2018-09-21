@@ -93,9 +93,10 @@ class Workflow(object):
                 CREATE TABLE IF NOT EXISTS task (
                   pid INTEGER DEFAULT NULL,
                   name TEXT NOT NULL,
-                  workflow_id TEXT NOT NULL DEFAULT '1',
+                  workflow_id TEXT NOT NULL,
                   active INTEGER NOT NULL DEFAULT 1,
                   locked INTEGER NOT NULL DEFAULT 0,
+                  shared INTEGER NOT NULL DEFAULT 0,
                   status INTEGER DEFAULT NULL,
                   input_file TEXT DEFAULT NULL,
                   output_file TEXT DEFAULT NULL,
@@ -113,15 +114,15 @@ class Workflow(object):
             cur.close()
 
     def run(self, tasks=[], **kwargs):
-        # if 0: collect completed tasks and quit
+        # if 0: collect completed tasks, register runs and quit
         secs = kwargs.get("secs", 60)
-        # whether or not run dependencies (even if not explicitly called)
+        # whether or not run dependencies
         dependencies = kwargs.get("dependencies", True)
         # whether or not skip already completed tasks
         resume = kwargs.get("resume", False)
-        # whether or not showing what is going to run and quit
+        # If True: show tasks about to be run and quit
         dry = kwargs.get("dry", False)
-        # max times a task is resubmitted if it fails
+        # max times a task is resubmitted if it fails (-1: unlimited)
         resubmit = kwargs.get("resubmit", 0)
 
         if not isinstance(tasks, (list, tuple)):
@@ -131,9 +132,15 @@ class Workflow(object):
             if task_name not in self.tasks:
                 raise RuntimeError("invalid task name: '{}'".format(task_name))
 
-        to_run = self.register_runs(tasks, dependencies, resume, dry)
+        to_run = self.register_runs(tasks, dependencies, resume, dry, not secs)
         if dry:
             sys.stderr.write("tasks to run:\n")
+            for task_name in to_run:
+                sys.stderr.write("    * {}\n".format(task_name))
+            return
+        elif not secs:
+            # We just register runs
+            sys.stderr.write("tasks added:\n")
             for task_name in to_run:
                 sys.stderr.write("    * {}\n".format(task_name))
             return
@@ -161,9 +168,23 @@ class Workflow(object):
                     # task flagged as running in the DB, is it still the case?
 
                     if task.pid != run["pid"]:
-                        # Not the same job ID: task being run by another workflow instance
-                        keep_running = True
-                    elif task.is_terminated():
+                        # Run by another workflow instance
+
+                        if run["shared"] and run["pid"] < 0:
+                            # Shareable LSF job: adopt run
+                            task.update(
+                                status=run['status'],
+                                output=run['output'],
+                                stdout=run['stdout'],
+                                stderr=run['stderr'],
+                                job_id=-run["pid"]
+                            )
+                        else:
+                            # Not shareable: wait for completion
+                            keep_running = True
+                            continue
+
+                    if task.is_terminated():
                         # Completed
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
@@ -218,6 +239,7 @@ class Workflow(object):
                         tasks_started.append(task_name)
                         tries[task_name] += 1
                         keep_running = True
+                        to_run[task_name] = False  # reset logging status
                 elif not to_run[task_name]:
                     # Completed (either success or error) and not logged
 
@@ -380,7 +402,7 @@ class Workflow(object):
             cur.execute(
                 """
                 SELECT 
-                  pid, status, output, stdout, stderr, 
+                  pid, shared, status, output, stdout, stderr, 
                   input_file, output_file, start_time, end_time
                 FROM task
                 WHERE active = 1 AND workflow_id = ? AND name = ?
@@ -389,7 +411,7 @@ class Workflow(object):
             )
 
             run = dict(zip(
-                ("pid", "status", "output", "stdout",
+                ("pid", "shared", "status", "output", "stdout",
                  "stderr", "input_file", "output_file",
                  "start_time", "end_time"),
                 cur.fetchone()
@@ -420,7 +442,8 @@ class Workflow(object):
             )
             cur.close()
 
-    def register_runs(self, tasks, dependencies=True, resume=False, dry=False):
+    def register_runs(self, tasks, dependencies=True, resume=False,
+                      dry=False, share_runs=False):
         con = sqlite3.connect(self.database)
         cur = con.cursor()
         cur.execute(
@@ -554,10 +577,10 @@ class Workflow(object):
 
                 cur.executemany(
                     """
-                    INSERT INTO task (name, workflow_id, create_time)
-                    VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S'))
+                    INSERT INTO task (name, workflow_id, shared, create_time)
+                    VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S'))
                     """,
-                    ((task_name, self.id) for task_name in to_run_insert)
+                    ((task_name, self.id, 1 if share_runs else 0) for task_name in to_run_insert)
                 )
 
             con.commit()
