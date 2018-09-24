@@ -172,6 +172,7 @@ class Task(object):
                 mem = 100
 
             cmd += [
+                "-M", "{}M".format(mem),
                 "-R", "rusage[mem={}M]".format(mem)
             ]
 
