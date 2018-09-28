@@ -292,10 +292,16 @@ class Task(object):
             else:
                 self._collect()
                 self.proc = None
-                self.status = STATUSES['success'] if returncode == 0 else STATUSES['error']
+                if returncode == 0:
+                    self.status = STATUSES['success']
+                else:
+                    self.status = STATUSES['error']
         elif self.job_id is not None:
             cmd = ["bjobs", str(self.job_id)]
-            output = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()[0].strip().decode()
+            output = Popen(
+                cmd,
+                stdout=PIPE, stderr=DEVNULL
+            ).communicate()[0].strip().decode()
             status = None
             try:
                 status = output.splitlines()[1].split()[2]
@@ -303,12 +309,16 @@ class Task(object):
                 pass
             finally:
                 if status in ("PEND", "RUN"):
-                    # PEND == pending on the cluster, but we submitted the task so we want it to run
+                    # PEND == pending on the cluster,
+                    # but we submitted the task so we want it to run
                     self.status = STATUSES['running']
                 else:
                     self._collect()
                     self.job_id = None
-                    self.status = STATUSES['success'] if status == "DONE" else STATUSES['error']
+                    if status == "DONE":
+                        self.status = STATUSES['success']
+                    else:
+                        self.status = STATUSES['error']
 
         return self.status
 
