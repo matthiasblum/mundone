@@ -196,6 +196,7 @@ class Workflow(object):
                             run['status'] = STATUSES['pending']
                             _resubmit = True
                         else:
+                            # TODO: because of dependency or not?
                             logger.error("'{}' has failed".format(task))
                             run['status'] = task.status
                             _resubmit = False
