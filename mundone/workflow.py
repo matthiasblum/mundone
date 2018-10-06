@@ -233,6 +233,7 @@ class Workflow(object):
                         # Cannot start this task, hence flag it as failed
                         self.tasks[task_name].update(status=STATUSES['error'])
                         tasks_done.append((task_name, False))
+                        failures.append(task_name)
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
