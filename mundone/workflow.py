@@ -75,9 +75,18 @@ class Workflow(object):
         else:
             self.email = None
 
+        self.daemon = kwargs.get("daemon", False)
+
         self.tasks = {t.name: t for t in tasks}
         self.init_database()
         self.active = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.daemon:
+            self.kill()
 
     @staticmethod
     def is_sqlite3(database):
