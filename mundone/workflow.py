@@ -500,6 +500,8 @@ class Workflow(object):
             elif status == STATUSES['pending']:
                 tasks_pending.add(task_name)
 
+            # todo: remove in/stdour/stderr files if they exist
+
         # Updated completed tasks that were still flagged as running
         if tasks_update:
             for task_name in tasks_update:
