@@ -7,6 +7,7 @@ import pickle
 import struct
 import tempfile
 import sys
+import time
 from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
 
@@ -147,7 +148,6 @@ class Task(object):
         self._output = None
         self.stdout = None
         self.stderr = None
-        self._start_time = None
         self._end_time = None
 
         self.pack(workdir)
@@ -198,7 +198,10 @@ class Task(object):
                 self.status = STATUSES['error']
             else:
                 self.job_id = job_id
+
+                # not running, actually just submitted
                 self.status = STATUSES['running']
+                self._start_time = None
         else:
             cmd = [
                 sys.executable,
@@ -212,19 +215,22 @@ class Task(object):
             self.proc = Popen(cmd, stdout=out, stderr=err)
             self.status = STATUSES['running']
             self.log_files = (out, err)
+            self._start_time = datetime.now()  # immediately started
 
     def kill(self):
         if self.proc is not None:
             self.proc.kill()
-            self.status = STATUSES['error']
             self.proc = None
         elif self.job_id is not None:
             cmd = ["bkill", str(self.job_id)]
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
-            self.status = STATUSES['error']
             self.job_id = None
+        else:
+            return
 
-        self.clean()
+        self.status = STATUSES['error']
+        time.sleep(3)
+        self._collect(out_must_exist=False)
 
     def is_running(self):
         return self.ping() == STATUSES['running']
@@ -238,11 +244,11 @@ class Task(object):
     def clean(self):
         for f in (self.stdout_f, self.stderr_f, self.input_f, self.output_f):
             try:
-                os.unlink(f)
+                os.remove(f)
             except FileNotFoundError:
                 pass
 
-    def _collect(self):
+    def _collect(self, out_must_exist=True):
         if self.log_files:
             out, err = self.log_files
             out.close()
@@ -255,10 +261,17 @@ class Task(object):
         with open(self.stderr_f, 'rt') as fh:
             self.stderr = fh.read()
 
-        with open(self.output_f, 'rb') as fh:
+        try:
+            fh = open(self.output_f, "rb")
+        except FileNotFoundError as e:
+            self._end_time = datetime.now()
+            if out_must_exist:
+                raise e
+        else:
             # todo: use returncode to confirm status found by `ping()`
             (self._output, returncode,
              self._start_time, self._end_time) = pickle.load(fh)
+            fh.close()
 
         self.clean()
 
@@ -279,7 +292,7 @@ class Task(object):
             output, returncode, start_time, end_time = pickle.load(fh)
 
         for f in (input_file, output_file, stderr_file, stdout_file):
-            os.unlink(f)
+            os.remove(f)
 
         return returncode, output, stdout, stderr, start_time, end_time
 
@@ -312,6 +325,14 @@ class Task(object):
                     # PEND == pending on the cluster,
                     # but we submitted the task so we want it to run
                     self.status = STATUSES['running']
+
+                    if status == "RUN" and self._start_time is None:
+                        """
+                        First time we see the status as running
+                        Keep this time for now, 
+                        it will be updated from the output file
+                        """
+                        self._start_time = datetime.now()
                 else:
                     self._collect()
                     self.job_id = None

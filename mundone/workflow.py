@@ -607,9 +607,11 @@ class Workflow(object):
         return ordered
 
     def kill(self):
+        logging.info("killing running tasks")
         runs_terminated = []
         for task_name, task in self.tasks.items():
             if task.is_running():
+                logging.info("\t- {}".format(task_name))
                 task.kill()
                 runs_terminated.append((task_name, False))
 
