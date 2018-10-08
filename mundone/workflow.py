@@ -142,7 +142,9 @@ class Workflow(object):
                 raise RuntimeError("invalid task name: '{}'".format(task_name))
 
         to_run = self.register_runs(tasks, dependencies, resume, dry, not secs)
-        if dry:
+        if not to_run:
+            return
+        elif dry:
             sys.stderr.write("tasks to run:\n")
             for task_name in to_run:
                 sys.stderr.write("    * {}\n".format(task_name))
@@ -521,56 +523,40 @@ class Workflow(object):
 
             con.commit()
 
-        if tasks:
-            # Run only passed tasks
-            to_run = set(tasks)
-            to_lookup = to_run
+        # Run only passed tasks
+        to_run = set(tasks)
+        to_lookup = to_run
 
-            # Add dependencies
-            while True:
-                run_dependencies = set()
+        # Add dependencies
+        while True:
+            run_dependencies = set()
 
-                for task_name in to_lookup:
-                    task = self.tasks[task_name]
-                    inputs = task.inputs
-                    for dep_name in task.requires:
-                        if dep_name not in self.tasks:
-                            raise ValueError("'{}' requires an invalid task: "
-                                             "'{}'".format(task, dep_name))
-                        elif task_name == dep_name:
-                            raise ValueError(
-                                "'{}' cannot require itself".format(task)
-                            )
+            for task_name in to_lookup:
+                task = self.tasks[task_name]
+                inputs = task.inputs
+                for dep_name in task.requires:
+                    if dep_name not in self.tasks:
+                        raise ValueError("'{}' requires an invalid task: "
+                                         "'{}'".format(task, dep_name))
+                    elif task_name == dep_name:
+                        raise ValueError(
+                            "'{}' cannot require itself".format(task)
+                        )
 
-                        if dep_name in tasks_success and resume:
-                            # skip completed dependency
-                            continue
-                        elif not dependencies and dep_name not in inputs:
-                            # skip dependency (only if the task does not require the dependency's output)
-                            continue
-                        else:
-                            run_dependencies.add(dep_name)
+                    if dep_name in tasks_success and resume:
+                        # skip completed dependency
+                        continue
+                    elif not dependencies and dep_name not in inputs:
+                        # skip dependency (only if the task does not require the dependency's output)
+                        continue
+                    else:
+                        run_dependencies.add(dep_name)
 
-                if run_dependencies:
-                    to_run |= run_dependencies
-                    to_lookup = run_dependencies
-                else:
-                    break
-
-            # Remove already running tasks
-            to_run -= set(tasks_running)
-        else:
-            # Run all talks...
-            to_run = set()
-            for task_name in self.tasks:
-                if task_name in tasks_running:
-                    # ... except those already running
-                    continue
-                elif task_name in tasks_success and resume:
-                    # ... and those that completed
-                    continue
-                else:
-                    to_run.add(task_name)
+            if run_dependencies:
+                to_run |= run_dependencies
+                to_lookup = run_dependencies
+            else:
+                break
 
         if to_run and not dry:
             to_run_insert = to_run - tasks_pending
