@@ -163,23 +163,22 @@ class Task(object):
             if isinstance(self.scheduler.get("queue"), str):
                 cmd += ["-q", self.scheduler["queue"]]
 
-            if isinstance(self.scheduler.get("cpu"), int):
-                cmd += ["-n", str(self.scheduler["cpu"])]
+            if isinstance(self.scheduler.get("cpu"), int) and self.scheduler["cpu"] > 1:
+                cmd += ["-n", str(self.scheduler["cpu"]), "-R", "span[hosts=1]"]
 
             if isinstance(self.scheduler.get("mem"), int):
                 mem = self.scheduler["mem"]
-            else:
-                mem = 100
-
-            cmd += [
-                "-M", "{}M".format(mem),
-                "-R", "rusage[mem={}M]".format(mem)
-            ]
+                cmd += [
+                    "-M", str(mem), 
+                    "-R", "select[mem>{}]".format(mem),
+                    "-R", "rusage[mem={}]".format(mem)
+                ]
 
             if isinstance(self.scheduler.get("tmp"), int):
+                tmp = self.scheduler["tmp"]
                 cmd += [
-                    "-R",
-                    "rusage[tmp={}M]".format(self.scheduler["tmp"])
+                    "-R", "select[tmp>{}]".format(tmp),
+                    "-R", "rusage[tmp={}]".format(tmp)
                 ]
 
             cmd += ["-o", self.stdout_f, "-e", self.stderr_f]
