@@ -165,7 +165,7 @@ class Workflow(object):
         to_run = {task_name: False for task_name in to_run}
 
         self.active = True
-        failures = []
+        failures = set()
         while self.active:
             tasks_started = []
             tasks_done = []
@@ -201,6 +201,10 @@ class Workflow(object):
                             logger.info("'{}' has been completed".format(task))
                             run['status'] = task.status
                             _resubmit = False
+                            try:
+                                failures.remove(task.name)
+                            except KeyError:
+                                pass
                         elif tries[task_name] <= resubmit:
                             # Failed but will resubmit task
                             logger.error("'{}' has failed".format(task))
@@ -211,7 +215,7 @@ class Workflow(object):
                             logger.error("'{}' has failed".format(task))
                             run['status'] = task.status
                             _resubmit = False
-                            failures.append(task.name)
+                            failures.add(task.name)
 
                         tasks_done.append((task_name, _resubmit))
                         to_run[task_name] = True  # logged
@@ -244,7 +248,7 @@ class Workflow(object):
                         # Cannot start this task, hence flag it as failed
                         self.tasks[task_name].update(status=STATUSES['error'])
                         tasks_done.append((task_name, False))
-                        failures.append(task_name)
+                        failures.add(task_name)
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))

@@ -263,6 +263,7 @@ class Task(object):
         try:
             fh = open(self.output_f, "rb")
         except FileNotFoundError as e:
+            # TODO: FIX (if killed by scheduler: out will NOT exist)
             self._end_time = datetime.now()
             if out_must_exist:
                 raise e
