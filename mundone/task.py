@@ -169,7 +169,7 @@ class Task(object):
             if isinstance(self.scheduler.get("mem"), int):
                 mem = self.scheduler["mem"]
                 cmd += [
-                    "-M", str(mem), 
+                    "-M", str(mem),
                     "-R", "select[mem>{}]".format(mem),
                     "-R", "rusage[mem={}]".format(mem)
                 ]
@@ -229,7 +229,7 @@ class Task(object):
 
         self.status = STATUSES['error']
         time.sleep(3)
-        self._collect(out_must_exist=False)
+        self._collect()
 
     def is_running(self):
         return self.ping() == STATUSES['running']
@@ -247,7 +247,7 @@ class Task(object):
             except FileNotFoundError:
                 pass
 
-    def _collect(self, out_must_exist=True):
+    def _collect(self):
         if self.log_files:
             out, err = self.log_files
             out.close()
@@ -263,10 +263,10 @@ class Task(object):
         try:
             fh = open(self.output_f, "rb")
         except FileNotFoundError as e:
-            # TODO: FIX (if killed by scheduler: out will NOT exist)
+            # If killed by scheduler: out will not exist
+            self._output = None
+            self.status = STATUSES['error']
             self._end_time = datetime.now()
-            if out_must_exist:
-                raise e
         else:
             # todo: use returncode to confirm status found by `ping()`
             (self._output, returncode,
@@ -329,7 +329,7 @@ class Task(object):
                     if status == "RUN" and self._start_time is None:
                         """
                         First time we see the status as running
-                        Keep this time for now, 
+                        Keep this time for now,
                         it will be updated from the output file
                         """
                         self._start_time = datetime.now()
