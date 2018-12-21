@@ -122,7 +122,7 @@ class Workflow(object):
 
             cur.close()
 
-    def run(self, tasks=[], **kwargs):
+    def run(self, tasks=None, **kwargs):
         # if 0: collect completed tasks, register runs and quit
         secs = kwargs.get("secs", 60)
         # whether or not run dependencies
@@ -134,12 +134,14 @@ class Workflow(object):
         # max times a task is resubmitted if it fails (-1: unlimited)
         resubmit = kwargs.get("resubmit", 0)
 
-        if not isinstance(tasks, (list, tuple)):
-            raise TypeError("run() arg 1 must be a list or a tuple")
-
-        for task_name in tasks:
-            if task_name not in self.tasks:
-                raise RuntimeError("invalid task name: '{}'".format(task_name))
+        if tasks is None:
+            pass
+        elif isinstance(tasks, (list, tuple)):
+            for task_name in tasks:
+                if task_name not in self.tasks:
+                    raise RuntimeError("invalid task name: '{}'".format(task_name))
+        else:
+            raise TypeError("run() arg 1 must be a list, a tuple, or None")
 
         to_run = self.register_runs(tasks, dependencies, resume, dry, not secs)
         if not to_run:
@@ -418,8 +420,8 @@ class Workflow(object):
             cur = con.cursor()
             cur.execute(
                 """
-                SELECT 
-                  pid, shared, status, output, stdout, stderr, 
+                SELECT
+                  pid, shared, status, output, stdout, stderr,
                   input_file, output_file, start_time, end_time
                 FROM task
                 WHERE active = 1 AND workflow_id = ? AND name = ?
@@ -467,7 +469,7 @@ class Workflow(object):
             """
             SELECT name, status, locked, input_file, output_file
             FROM task
-            WHERE active = 1 AND workflow_id = ? 
+            WHERE active = 1 AND workflow_id = ?
             """,
             (self.id,)
         )
@@ -529,8 +531,20 @@ class Workflow(object):
 
             con.commit()
 
-        # Run only passed tasks
-        to_run = set(tasks)
+        if tasks is None:
+            # All tasks not already completed/running/pending
+            to_run = set()
+            for task_name in self.tasks:
+                if task_name in tasks_success and resume:
+                    continue
+                elif task_name in tasks_running or task_name in tasks_pending:
+                    continue
+                else:
+                    to_run.add(task_name)
+        else:
+            # Run passed tasks
+            to_run = set(tasks)
+
         to_lookup = to_run
 
         # Add dependencies
@@ -565,7 +579,7 @@ class Workflow(object):
                 break
 
         if to_run and not dry:
-            to_run_insert = to_run - tasks_pending
+            to_run_insert = to_run - tasks_pending - tasks_running
 
             if to_run_insert:
                 # Update runs
