@@ -88,6 +88,10 @@ class Workflow(object):
         if not self.daemon:
             self.kill()
 
+    def __del__(self):
+        if not self.daemon:
+            self.kill()
+
     @staticmethod
     def is_sqlite3(database):
         with open(database, "rb") as fh:
