@@ -14,13 +14,13 @@ from smtplib import SMTP
 from mundone import __version__
 from .task import STATUSES, Task
 
-logger = logging.getLogger('mundone')
+logger = logging.getLogger("mundone")
 logger.setLevel(logging.INFO)
 _ch = logging.StreamHandler()
 _ch.setFormatter(
     logging.Formatter(
-        fmt='%(asctime)s: %(message)s',
-        datefmt='%y-%m-%d %H:%M:%S'
+        fmt="%(asctime)s: %(message)s",
+        datefmt="%y-%m-%d %H:%M:%S"
     )
 )
 logger.addHandler(_ch)
@@ -181,7 +181,7 @@ class Workflow(object):
                 run = self.acquire_run(task_name, lock=True)
                 task = self.tasks[task_name]
 
-                if run['status'] == STATUSES['running']:
+                if run["status"] == STATUSES["running"]:
                     # task flagged as running in the DB, is it still the case?
 
                     if task.pid != run["pid"]:
@@ -190,10 +190,10 @@ class Workflow(object):
                         if run["shared"] and run["pid"] < 0:
                             # Shareable LSF job: adopt run
                             task.update(
-                                status=run['status'],
-                                output=run['output'],
-                                stdout=run['stdout'],
-                                stderr=run['stderr'],
+                                status=run["status"],
+                                output=run["output"],
+                                stdout=run["stdout"],
+                                stderr=run["stderr"],
                                 job_id=-run["pid"]
                             )
                         else:
@@ -205,7 +205,7 @@ class Workflow(object):
                         # Completed
                         if task.is_success():
                             logger.info("'{}' has been completed".format(task))
-                            run['status'] = task.status
+                            run["status"] = task.status
                             _resubmit = False
                             try:
                                 failures.remove(task.name)
@@ -214,12 +214,12 @@ class Workflow(object):
                         elif tries[task_name] <= resubmit:
                             # Failed but will resubmit task
                             logger.error("'{}' has failed".format(task))
-                            run['status'] = STATUSES['pending']
+                            run["status"] = STATUSES["pending"]
                             _resubmit = True
                         else:
                             # TODO: because of dependency or not?
                             logger.error("'{}' has failed".format(task))
-                            run['status'] = task.status
+                            run["status"] = task.status
                             _resubmit = False
                             failures.add(task.name)
 
@@ -227,7 +227,7 @@ class Workflow(object):
                         to_run[task_name] = True  # logged
                     else:
                         keep_running = True
-                elif run['status'] == STATUSES['pending']:
+                elif run["status"] == STATUSES["pending"]:
                     flag = 0
 
                     if dependencies:
@@ -238,9 +238,9 @@ class Workflow(object):
                     for dep_name in deps:
                         dep_run = self.acquire_run(dep_name, lock=False)
 
-                        if dep_run['status'] == STATUSES['error']:
+                        if dep_run["status"] == STATUSES["error"]:
                             flag |= 1
-                        elif dep_run['status'] != STATUSES['success']:
+                        elif dep_run["status"] != STATUSES["success"]:
                             flag |= 2
                         elif dep_name in failures:
                             # dependencies failed, but then completed successfully
@@ -252,7 +252,7 @@ class Workflow(object):
                     elif flag & 1:
                         # All dependencies done but one or more failed:
                         # Cannot start this task, hence flag it as failed
-                        self.tasks[task_name].update(status=STATUSES['error'])
+                        self.tasks[task_name].update(status=STATUSES["error"])
                         tasks_done.append((task_name, False))
                         failures.add(task_name)
                     else:
@@ -267,10 +267,10 @@ class Workflow(object):
                     # Completed (either success or error) and not logged
 
                     # Update the task
-                    task.update(status=run['status'], output=run['output'],
-                                stdout=run['stdout'], stderr=run['stderr'])
+                    task.update(status=run["status"], output=run["output"],
+                                stdout=run["stdout"], stderr=run["stderr"])
 
-                    if run['status'] == STATUSES['success']:
+                    if run["status"] == STATUSES["success"]:
                         logger.info("'{}' has been completed".format(task))
                     else:
                         logger.error("'{}' has failed".format(task))
@@ -290,7 +290,7 @@ class Workflow(object):
         if failures:
             logger.error("workflow could not complete "
                          "because one or more tasks failed: "
-                         "{}".format(', '.join(failures)))
+                         "{}".format(", ".join(failures)))
             success = False
         else:
             logger.info("workflow completed successfully")
@@ -337,15 +337,15 @@ class Workflow(object):
             msg = EmailMessage()
             msg.set_content(content)
 
-            msg['Subject'] = subject
-            msg['From'] = self.email["user"]
+            msg["Subject"] = subject
+            msg["From"] = self.email["user"]
 
             to_addrs = self.email.get("to")
             if to_addrs and isinstance(to_addrs, (list, tuple)):
                 to_addrs = set(to_addrs)
-                msg['To'] = ','.join(to_addrs)
+                msg["To"] = ','.join(to_addrs)
             else:
-                msg['To'] = [self.email["user"]]
+                msg["To"] = [self.email["user"]]
 
             host = self.email["host"]
             port = self.email.get("port", 475)
@@ -371,7 +371,7 @@ class Workflow(object):
                       submit_time = ?
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
-                    (task.pid, STATUSES['running'],
+                    (task.pid, STATUSES["running"],
                      task.input_f, task.output_f,
                      task.submit_time, task_name, self.id)
                 )
@@ -396,7 +396,7 @@ class Workflow(object):
                      task.end_time, task_name, self.id)
                 )
 
-                if task.status == STATUSES['error'] and resubmit:
+                if task.status == STATUSES["error"] and resubmit:
                     new_runs.append(task_name)
 
             if new_runs:
@@ -412,7 +412,7 @@ class Workflow(object):
                 cur.executemany(
                     """
                     INSERT INTO task (name, workflow_id, create_time)
-                    VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S'))
+                    VALUES (?, ?, strftime("%Y-%m-%d %H:%M:%S"))
                     """,
                     ((task_name, self.id) for task_name in new_runs)
                 )
@@ -485,10 +485,10 @@ class Workflow(object):
         for task_name, status, locked, input_file, output_file in cur:
             if task_name not in self.tasks:
                 continue  # todo: error message
-            elif status == STATUSES['success']:
+            elif status == STATUSES["success"]:
                 # Task completed successfully: tasks depending on this one can run
                 tasks_success.add(task_name)
-            elif status == STATUSES['running']:
+            elif status == STATUSES["running"]:
                 # Flagged as running in the database
                 if os.path.isfile(output_file) and not locked:
                     # But the output file exists!
@@ -496,7 +496,7 @@ class Workflow(object):
                      stdout, stderr,
                      start_time, end_time) = Task.collect(output_file)
 
-                    if status == STATUSES['success']:
+                    if status == STATUSES["success"]:
                         tasks_success.add(task_name)
 
                     task = self.tasks[task_name]
@@ -507,7 +507,7 @@ class Workflow(object):
                 else:
                     # Assume the task is still running
                     tasks_running.add(task_name)
-            elif status == STATUSES['pending']:
+            elif status == STATUSES["pending"]:
                 tasks_pending.add(task_name)
 
             # todo: remove in/stdour/stderr files if they exist
@@ -599,7 +599,7 @@ class Workflow(object):
                 cur.executemany(
                     """
                     INSERT INTO task (name, workflow_id, shared, create_time)
-                    VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S'))
+                    VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
                     """,
                     ((task_name, self.id, 1 if share_runs else 0) for task_name in to_run_insert)
                 )
