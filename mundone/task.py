@@ -181,6 +181,13 @@ class Task(object):
                     "-R", "rusage[tmp={}]".format(tmp)
                 ]
 
+            if isinstance(self.scheduler.get("scratch"), int):
+                scratch = self.scheduler["scratch"]
+                cmd += [
+                    "-R", "select[scratch>{}]".format(scratch),
+                    "-R", "rusage[scratch={}]".format(scratch)
+                ]
+
             cmd += ["-o", self.stdout_f, "-e", self.stderr_f]
             cmd += [
                 sys.executable,
