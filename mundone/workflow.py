@@ -490,7 +490,9 @@ class Workflow(object):
                 tasks_success.add(task_name)
             elif status == STATUSES["running"]:
                 # Flagged as running in the database
-                if os.path.isfile(output_file) and not locked:
+                if output_file is None:
+                    tasks_pending.add(task_name)
+                elif os.path.isfile(output_file) and not locked:
                     # But the output file exists!
                     (status, output,
                      stdout, stderr,
