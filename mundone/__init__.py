@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version_info__ = (0, 2, 5)
+__version_info__ = (0, 2, 6)
 __version__ = '.'.join(map(str, __version_info__))
 
 from .task import Task
