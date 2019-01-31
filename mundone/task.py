@@ -328,9 +328,16 @@ class Task(object):
             except IndexError:
                 pass
             finally:
-                if status in ("PEND", "RUN"):
-                    # PEND == pending on the cluster,
-                    # but we submitted the task so we want it to run
+                if status == "DONE":
+                    self._collect()
+                    self.job_id = None
+                    self.status = STATUSES['success']
+                elif status == "EXITED":
+                    self._collect()
+                    self.job_id = None
+                    self.status = STATUSES['error']
+                else:
+                    # PEND, RUN, UNKNOWN, etc.
                     self.status = STATUSES['running']
 
                     if status == "RUN" and self._start_time is None:
@@ -340,13 +347,6 @@ class Task(object):
                         it will be updated from the output file
                         """
                         self._start_time = datetime.now()
-                else:
-                    self._collect()
-                    self.job_id = None
-                    if status == "DONE":
-                        self.status = STATUSES['success']
-                    else:
-                        self.status = STATUSES['error']
 
         return self.status
 
