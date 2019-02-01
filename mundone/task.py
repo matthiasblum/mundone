@@ -332,7 +332,7 @@ class Task(object):
                     self._collect()
                     self.job_id = None
                     self.status = STATUSES['success']
-                elif status == "EXITED":
+                elif status == "EXIT":
                     self._collect()
                     self.job_id = None
                     self.status = STATUSES['error']
