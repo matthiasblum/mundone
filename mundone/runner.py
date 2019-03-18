@@ -28,7 +28,9 @@ def main():
         result = fn(*args, **kwargs)
     except Exception as e:
         exc_type, exc_obj, exc_tb = sys.exc_info()
-        sys.stderr.write("{}, line {}: {}\n".format(exc_type, exc_tb.tb_lineno, e))
+
+        # line_no = exc_tb.tb_lineno
+        sys.stderr.write("{}: {}\n".format(exc_type, e))
         result = None
         returncode = 2  # error status code (see `mundone.task`)
     else:

@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
+from typing import Collection, Optional, Set
 
 from . import runner
 
@@ -20,18 +21,22 @@ STATUSES = {
 }
 
 
-def mktemp(prefix=None, suffix=None, dir=None, isdir=False):
+def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
+           dir: Optional[str]=None, isdir: bool=False) -> str:
+
     if isdir:
-        pathname = tempfile.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
+        path = tempfile.mkdtemp(suffix, prefix, dir)
     else:
-        fd, pathname = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=dir)
+        fd, path = tempfile.mkstemp(suffix, prefix, dir)
         os.close(fd)
 
-    return pathname
+    return path
 
 
 class Task(object):
-    def __init__(self, fn, args=[], kwargs={}, **_kwargs):
+    def __init__(self, fn: function, args: Collection=[], kwargs: dict=dict(),
+                 **_kwargs):
+
         if not callable(fn):
             raise TypeError("'{}' is not callable".format(fn))
         elif not isinstance(args, (list, tuple)):
@@ -44,7 +49,7 @@ class Task(object):
         self.kwargs = kwargs
 
         self.name = _kwargs.get("name", fn.__name__)
-        self.status = STATUSES["pending"]
+        self._status = STATUSES["pending"]
         self.proc = None
         self.job_id = None
         self.input_f = None
@@ -70,26 +75,74 @@ class Task(object):
             self.scheduler = None
 
         if isinstance(_kwargs.get("requires"), (tuple, list)):
-            requires = set()
+            requires = self.inputs
             for dep in set(_kwargs["requires"]):
                 if isinstance(dep, Task):
                     requires.add(dep.name)
                 else:
                     requires.add(dep)
-            self.requires = requires | set(self.inputs)
+            self.requires = requires
         else:
-            self.requires = set(self.inputs)
+            self.requires = self.inputs
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.name
 
-    def pack(self, workdir=None):
-        try:
-            os.makedirs(workdir)
-        except FileExistsError:
-            pass
-        except (AttributeError, PermissionError, TypeError):
-            workdir = None
+    @property
+    def status(self) -> str:
+        for name, value in STATUSES:
+            if self._status == value:
+                return name
+
+    @property
+    def inputs(self) -> Set[str]:
+        names = set()
+        for arg in self.args:
+            if isinstance(arg, TaskOutput):
+                names.add(arg.task)
+
+        for key, arg in self.kwargs.items():
+            if isinstance(arg, TaskOutput):
+                names.add(arg.task)
+
+        return names
+
+    @property
+    def output(self):
+        return TaskOutput(self)
+
+    @property
+    def pid(self) -> Optional[int]:
+        if self.proc is not None:
+            return self.proc.pid
+        elif self.job_id is not None:
+            return -self.job_id
+        else:
+            return None
+
+    @property
+    def start_time(self) -> Optional[str]:
+        if self._start_time:
+            return self._start_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return None
+
+    @property
+    def end_time(self) -> Optional[str]:
+        if self._end_time:
+            return self._end_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return None
+
+    @property
+    def submit_time(self) -> Optional[str]:
+        if self._submit_time:
+            return self._submit_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return None
+
+    def pack(self, workdir: str) -> str:
+        os.makedirs(workdir, exist_ok=True)
 
         self.input_f = mktemp(prefix=self.name, suffix=".in.p", dir=workdir)
         self.output_f = self.input_f[:-5] + ".out.p"
@@ -115,7 +168,9 @@ class Task(object):
 
             fh.write(p)
 
-    def ready(self):
+        return self.input_f[:-5]
+
+    def ready(self) -> bool:
         args = []
         for arg in self.args:
             if isinstance(arg, TaskOutput):
@@ -140,7 +195,7 @@ class Task(object):
         self.kwargs = kwargs
         return True
 
-    def run(self, workdir=None):
+    def run(self, workdir: str=os.getcwd()):
         if not self.ready():
             return
 
@@ -149,9 +204,7 @@ class Task(object):
         self.stderr = None
         self._end_time = None
 
-        self.pack(workdir)
-
-        basepath = self.input_f[:-5]
+        basepath = self.pack(workdir)
         self.stdout_f = basepath + ".out"
         self.stderr_f = basepath + ".err"
         self._submit_time = datetime.now()
@@ -162,29 +215,30 @@ class Task(object):
             if isinstance(self.scheduler.get("queue"), str):
                 cmd += ["-q", self.scheduler["queue"]]
 
-            if isinstance(self.scheduler.get("cpu"), int) and self.scheduler["cpu"] > 1:
-                cmd += ["-n", str(self.scheduler["cpu"]), "-R", "span[hosts=1]"]
+            num_cpus = self.scheduler.get("cpu")
+            if isinstance(num_cpus, int) and num_cpus > 1:
+                cmd += ["-n", str(num_cpus), "-R", "span[hosts=1]"]
 
-            if isinstance(self.scheduler.get("mem"), int):
-                mem = self.scheduler["mem"]
+            mem = self.scheduler.get("mem")
+            if isinstance(mem, int):
                 cmd += [
                     "-M", str(mem),
                     "-R", "select[mem>{}]".format(mem),
                     "-R", "rusage[mem={}]".format(mem)
                 ]
 
-            if isinstance(self.scheduler.get("tmp"), int):
-                tmp = self.scheduler["tmp"]
+            tmp = self.scheduler.get("tmp")
+            if isinstance(tmp, int):
                 cmd += [
                     "-R", "select[tmp>{}]".format(tmp),
                     "-R", "rusage[tmp={}]".format(tmp)
                 ]
 
-            if isinstance(self.scheduler.get("scratch"), int):
-                scratch = self.scheduler["scratch"]
+            tmp = self.scheduler.get("scratch")
+            if isinstance(tmp, int):
                 cmd += [
-                    "-R", "select[scratch>{}]".format(scratch),
-                    "-R", "rusage[scratch={}]".format(scratch)
+                    "-R", "select[scratch>{}]".format(tmp),
+                    "-R", "rusage[scratch={}]".format(tmp)
                 ]
 
             cmd += ["-o", self.stdout_f, "-e", self.stderr_f]
@@ -195,17 +249,18 @@ class Task(object):
                 self.output_f
             ]
 
-            output = Popen(cmd, stdout=PIPE).communicate()[0].strip().decode()
+            outs, errs = Popen(cmd, stdout=PIPE).communicate()
+            outs = outs.strip().decode()
             try:
                 # Expected format: Job <job_id> is submitted to queue <queue>.
-                job_id = int(output.split('<')[1].split('>')[0])
+                job_id = int(outs.split('<')[1].split('>')[0])
             except (IndexError, ValueError):
-                self.status = STATUSES["error"]
+                self._status = STATUSES["error"]
             else:
                 self.job_id = job_id
 
                 # not running, actually just submitted
-                self.status = STATUSES["running"]
+                self._status = STATUSES["running"]
                 self._start_time = None
         else:
             cmd = [
@@ -215,12 +270,108 @@ class Task(object):
                 self.output_f
             ]
 
-            out = open(self.stdout_f, "wt")
-            err = open(self.stderr_f, "wt")
-            self.proc = Popen(cmd, stdout=out, stderr=err)
-            self.status = STATUSES["running"]
-            self.log_files = (out, err)
+            outs = open(self.stdout_f, "wt")
+            errs = open(self.stderr_f, "wt")
+            self.proc = Popen(cmd, stdout=outs, stderr=errs)
+            self._status = STATUSES["running"]
+            self.log_files = (outs, errs)
             self._start_time = datetime.now()  # immediately started
+
+    def collect(self):
+        if self.log_files:
+            outs, errs = self.log_files
+            outs.close()
+            errs.close()
+            self.log_files = None
+
+        with open(self.stdout_f, "rt") as fh:
+            self.stdout = fh.read()
+
+        with open(self.stderr_f, "rt") as fh:
+            self.stderr = fh.read()
+
+        try:
+            fh = open(self.output_f, "rb")
+        except FileNotFoundError:
+            # Process/job: killed the output file might not exist
+            self._output = None
+            self._status = STATUSES["error"]
+            self._end_time = datetime.now()
+        else:
+            res = pickle.load(fh)
+            fh.close()
+
+            self._output = res[0]
+
+            # todo: use returncode to confirm status found by `ping()`
+            returncode = res[1]
+
+            self._start_time = res[2]
+            self._end_time = res[3]
+
+        self.clean()
+
+    def clean(self):
+        for f in (self.stdout_f, self.stderr_f, self.input_f, self.output_f):
+            try:
+                os.remove(f)
+            except FileNotFoundError:
+                pass
+
+    def ping(self) -> int:
+        if self.proc is not None:
+            returncode = self.proc.poll()
+
+            if returncode is None:
+                self._status = STATUSES["running"]
+            else:
+                self.collect()
+                self.proc = None
+                if returncode == 0:
+                    self._status = STATUSES["success"]
+                else:
+                    self._status = STATUSES["error"]
+        elif self.job_id is not None:
+            cmd = ["bjobs", str(self.job_id)]
+            outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL)
+            outs = outs.strip().decode()
+
+            status = None
+            try:
+                status = outs.splitlines()[1].split()[2]
+            except IndexError:
+                pass
+            finally:
+                if status == "DONE":
+                    self.collect()
+                    self.job_id = None
+                    self._status = STATUSES["success"]
+                elif status == "EXIT":
+                    self.collect()
+                    self.job_id = None
+                    self._status = STATUSES["error"]
+                else:
+                    # PEND, RUN, UNKNOWN, etc.
+                    self._status = STATUSES["running"]
+
+                    if status == "RUN" and self._start_time is None:
+                        """
+                        First time we see the status as running
+                        Keep this time for now,
+                        it will be updated from the output file
+                        """
+                        self._start_time = datetime.now()
+
+        return self._status
+
+    def running(self) -> bool:
+        return self.ping() == STATUSES["running"]
+
+    def successful(self) -> bool:
+        return self.ping() == STATUSES["success"]
+
+    def done(self) -> bool:
+        return self.ping() in (STATUSES["success"], STATUSES["error"])
 
     def kill(self):
         if self.proc is not None:
@@ -233,125 +384,13 @@ class Task(object):
         else:
             return
 
-        self.status = STATUSES["error"]
         time.sleep(3)
-        self._collect()
-
-    def is_running(self):
-        return self.ping() == STATUSES["running"]
-
-    def is_success(self):
-        return self.ping() == STATUSES["success"]
-
-    def is_terminated(self):
-        return self.ping() in (STATUSES["success"], STATUSES["error"])
-
-    def clean(self):
-        for f in (self.stdout_f, self.stderr_f, self.input_f, self.output_f):
-            try:
-                os.remove(f)
-            except FileNotFoundError:
-                pass
-
-    def _collect(self):
-        if self.log_files:
-            out, err = self.log_files
-            out.close()
-            err.close()
-            self.log_files = None
-
-        with open(self.stdout_f, "rt") as fh:
-            self.stdout = fh.read()
-
-        with open(self.stderr_f, "rt") as fh:
-            self.stderr = fh.read()
-
-        try:
-            fh = open(self.output_f, "rb")
-        except FileNotFoundError as e:
-            # If killed by scheduler: out will not exist
-            self._output = None
-            self.status = STATUSES["error"]
-            self._end_time = datetime.now()
-        else:
-            # todo: use returncode to confirm status found by `ping()`
-            (self._output, returncode,
-             self._start_time, self._end_time) = pickle.load(fh)
-            fh.close()
-
-        self.clean()
-
-    @staticmethod
-    def collect(output_file):
-        basepath = output_file[:-6]
-        input_file = basepath + ".in.p"
-        stderr_file = basepath + ".err"
-        stdout_file = basepath + ".out"
-
-        with open(stderr_file, "rt") as fh:
-            stderr = fh.read()
-
-        with open(stdout_file, "rt") as fh:
-            stdout = fh.read()
-
-        with open(output_file, "rb") as fh:
-            output, returncode, start_time, end_time = pickle.load(fh)
-
-        for f in (input_file, output_file, stderr_file, stdout_file):
-            os.remove(f)
-
-        return returncode, output, stdout, stderr, start_time, end_time
-
-    def ping(self):
-        if self.proc is not None:
-            returncode = self.proc.poll()
-
-            if returncode is None:
-                self.status = STATUSES["running"]
-            else:
-                self._collect()
-                self.proc = None
-                if returncode == 0:
-                    self.status = STATUSES["success"]
-                else:
-                    self.status = STATUSES["error"]
-        elif self.job_id is not None:
-            cmd = ["bjobs", str(self.job_id)]
-            output = Popen(
-                cmd,
-                stdout=PIPE, stderr=DEVNULL
-            ).communicate()[0].strip().decode()
-            status = None
-            try:
-                status = output.splitlines()[1].split()[2]
-            except IndexError:
-                pass
-            finally:
-                if status == "DONE":
-                    self._collect()
-                    self.job_id = None
-                    self.status = STATUSES["success"]
-                elif status == "EXIT":
-                    self._collect()
-                    self.job_id = None
-                    self.status = STATUSES["error"]
-                else:
-                    # PEND, RUN, UNKNOWN, etc.
-                    self.status = STATUSES["running"]
-
-                    if status == "RUN" and self._start_time is None:
-                        """
-                        First time we see the status as running
-                        Keep this time for now,
-                        it will be updated from the output file
-                        """
-                        self._start_time = datetime.now()
-
-        return self.status
+        self.collect()
+        self._status = STATUSES["error"]
 
     def update(self, **kwargs):
         try:
-            self.status = kwargs["status"]
+            self._status = kwargs["status"]
         except KeyError:
             pass
 
@@ -397,69 +436,38 @@ class Task(object):
         finally:
             self.proc = None
 
-    def get_status(self):
-        for k, v in STATUSES.items():
-            if self.status == v:
-                return k
+    @staticmethod
+    def collect_alt(output_file: str) -> tuple:
+        basepath = output_file[:-6]
+        input_file = basepath + ".in.p"
+        stderr_file = basepath + ".err"
+        stdout_file = basepath + ".out"
 
-    @property
-    def inputs(self):
-        names = set()
-        for arg in self.args:
-            if isinstance(arg, TaskOutput):
-                names.add(arg.task)
+        with open(stderr_file, "rt") as fh:
+            stderr = fh.read()
 
-        for key, arg in self.kwargs.items():
-            if isinstance(arg, TaskOutput):
-                names.add(arg.task)
+        with open(stdout_file, "rt") as fh:
+            stdout = fh.read()
 
-        return list(names)
+        with open(output_file, "rb") as fh:
+            output, status, start_time, end_time = pickle.load(fh)
 
-    @property
-    def output(self):
-        return TaskOutput(self)
+        for f in (input_file, output_file, stderr_file, stdout_file):
+            os.remove(f)
 
-    @property
-    def pid(self):
-        if self.proc is not None:
-            return self.proc.pid
-        elif self.job_id is not None:
-            return -self.job_id
-        else:
-            return None
-
-    @property
-    def start_time(self):
-        if self._start_time:
-            return self._start_time.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            return None
-
-    @property
-    def end_time(self):
-        if self._end_time:
-            return self._end_time.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            return None
-
-    @property
-    def submit_time(self):
-        if self._submit_time:
-            return self._submit_time.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            return None
+        return status, output, stdout, stderr, start_time, end_time
 
 
 class TaskOutput(object):
-    def __init__(self, task):
+    def __init__(self, task: Task):
         self._task = task
 
-    def ready(self):
-        return self._task.is_terminated()
+    def ready(self) -> bool:
+        return self._task.done()
 
     def read(self):
         return self._task._output
 
     @property
-    def task(self):
+    def task(self) -> str:
         return self._task.name

@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from email.message import EmailMessage
 from smtplib import SMTP
+from typing import Collection, Optional, Set
 
 from mundone import __version__
 from .task import STATUSES, Task
@@ -25,39 +26,41 @@ _ch.setFormatter(
 logger.addHandler(_ch)
 logger.propagate = False
 
+DBNAME = "mundone.sqlite"
+
 
 class Workflow(object):
-    def __init__(self, tasks, **kwargs):
+    def __init__(self, tasks: Collection[Task], **kwargs):
         self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
         if not isinstance(self.id, str):
             raise ValueError("'id' expects a str")
 
         self.workdir = kwargs.get("dir", os.getcwd())
-        try:
-            os.makedirs(self.workdir)
-        except FileExistsError:
-            pass
-        except (AttributeError, PermissionError, TypeError):
-            raise RuntimeError("Cannot create directory '{}'".format(self.workdir))
+        os.makedirs(self.workdir, exist_ok=True)
 
-        self.database = kwargs.get("database", os.path.join(self.workdir, "mundone.sqlite"))
+        self.database = kwargs.get("db", os.path.join(self.workdir, DBNAME))
         if isinstance(self.database, str):
-            if os.path.isfile(self.database) and not self.is_sqlite3(self.database):
-                raise RuntimeError("'{}' is not an SQLite database".format(self.database))
+            if not self.is_sqlite3(self.database):
+                raise RuntimeError("'{}' is not "
+                                   "an SQLite database".format(self.database))
             elif not os.path.isfile(self.database):
                 try:
                     open(self.database, "w").close()
                 except (FileNotFoundError, PermissionError):
                     # Cannot create file
-                    raise RuntimeError("Cannot create database '{}'".format(self.database))
+                    raise RuntimeError("Cannot create database "
+                                       "'{}'".format(self.database))
+                else:
+                    os.remove(self.database)
 
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("Workflow() arg 1 must be a list or a tuple")
         elif not tasks:
             raise ValueError("Workflow() arg 1 cannot be empty")
         elif not all([isinstance(task, Task) for task in tasks]):
-            raise TypeError("Workflow() arg 1 expects a sequence of Task objects")
+            raise TypeError("Workflow() arg 1 expects a sequence "
+                            "of Task objects")
         elif len(tasks) != len(set([t.name for t in tasks])):
             raise RuntimeError("One or more tasks with the same name")
 
@@ -92,7 +95,10 @@ class Workflow(object):
             self.kill()
 
     @staticmethod
-    def is_sqlite3(database):
+    def is_sqlite3(database: str) -> bool:
+        if not os.path.isfile(database):
+            return False
+
         with open(database, "rb") as fh:
             return fh.read(16).decode() == "SQLite format 3\x00"
 
@@ -125,15 +131,19 @@ class Workflow(object):
 
             cur.close()
 
-    def run(self, tasks=None, **kwargs):
-        # if 0: collect completed tasks, register runs and quit
+    def run(self, tasks: Optional[Collection[str]]=None, **kwargs):
+        # if 0: collect completed tasks, register runs and exit
         secs = kwargs.get("secs", 60)
+
         # whether or not run dependencies
         dependencies = kwargs.get("dependencies", True)
+
         # whether or not skip already completed tasks
         resume = kwargs.get("resume", False)
+
         # If True: show tasks about to be run and quit
         dry = kwargs.get("dry", False)
+
         # max times a task is resubmitted if it fails (-1: unlimited)
         resubmit = kwargs.get("resubmit", 0)
 
@@ -142,7 +152,8 @@ class Workflow(object):
         elif isinstance(tasks, (list, tuple)):
             for task_name in tasks:
                 if task_name not in self.tasks:
-                    raise RuntimeError("invalid task name: '{}'".format(task_name))
+                    raise RuntimeError("invalid task name: "
+                                       "'{}'".format(task_name))
         else:
             raise TypeError("run() arg 1 must be a list, a tuple, or None")
 
@@ -242,7 +253,10 @@ class Workflow(object):
                         elif dep_run["status"] != STATUSES["success"]:
                             flag |= 2
                         elif dep_name in failures:
-                            # dependencies failed, but then completed successfully
+                            """
+                            dependencies failed, 
+                            but then completed successfully
+                            """
                             failures.remove(dep_name)
 
                     if flag & 2:
@@ -464,8 +478,10 @@ class Workflow(object):
             )
             cur.close()
 
-    def register_runs(self, tasks, dependencies=True, resume=False,
-                      dry=False, share_runs=False):
+    def register_runs(self, tasks: Optional[Collection[str]],
+                      dependencies: bool=True, resume: bool=False,
+                      dry: bool=False, share_runs: bool=False
+                      ) -> Collection[str]:
         con = sqlite3.connect(self.database)
         cur = con.cursor()
         cur.execute(
@@ -483,27 +499,30 @@ class Workflow(object):
         tasks_update = []
         for task_name, status, locked, input_file, output_file in cur:
             if task_name not in self.tasks:
-                continue  # todo: error message
+                # Task in DB that is not in the workflow any more
+                continue
             elif status == STATUSES["success"]:
-                # Task completed successfully: tasks depending on this one can run
+                """
+                Task completed successfully:
+                    tasks depending on this one can run
+                """
                 tasks_success.add(task_name)
             elif status == STATUSES["running"]:
                 # Flagged as running in the database
                 if output_file is None:
+                    # ... but actually pending (would not be None if running)
                     tasks_pending.add(task_name)
                 elif os.path.isfile(output_file) and not locked:
-                    # But the output file exists!
-                    (status, output,
-                     stdout, stderr,
-                     start_time, end_time) = Task.collect(output_file)
+                    # ... but the output file exists!
+                    keys = ("status", "output", "stdout", "stderr",
+                            "start_time", "end_time")
+                    values = Task.collect_alt(output_file)
+                    res = dict(zip(keys, values))
 
-                    if status == STATUSES["success"]:
+                    if res["status"] == STATUSES["success"]:
                         tasks_success.add(task_name)
 
-                    task = self.tasks[task_name]
-                    task.update(status=status, output=output,
-                                stdout=stdout, stderr=stderr,
-                                start_time=start_time, end_time=end_time)
+                    self.tasks[task_name].update(res)
                     tasks_update.append(task_name)
                 else:
                     # Assume the task is still running
@@ -511,30 +530,27 @@ class Workflow(object):
             elif status == STATUSES["pending"]:
                 tasks_pending.add(task_name)
 
-            # todo: remove in/stdour/stderr files if they exist
+            # TODO: remove in/stdour/stderr files if they exist
 
         # Updated completed tasks that were still flagged as running
-        if tasks_update:
-            for task_name in tasks_update:
-                task = self.tasks[task_name]
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET
-                      status = ?,
-                      output = ?,
-                      stdout = ?,
-                      stderr = ?,
-                      start_time = ?,
-                      end_time = ?
-                    WHERE name = ? AND active = 1 AND workflow_id = ?
-                    """,
-                    (task.status, json.dumps(task.output.read()),
-                     task.stdout, task.stderr, task.start_time,
-                     task.end_time, task_name, self.id)
-                )
-
-            con.commit()
+        for task_name in tasks_update:
+            task = self.tasks[task_name]
+            cur.execute(
+                """
+                UPDATE task
+                SET
+                  status = ?,
+                  output = ?,
+                  stdout = ?,
+                  stderr = ?,
+                  start_time = ?,
+                  end_time = ?
+                WHERE name = ? AND active = 1 AND workflow_id = ?
+                """,
+                (task.status, json.dumps(task.output.read()),
+                 task.stdout, task.stderr, task.start_time,
+                 task.end_time, task_name, self.id)
+            )
 
         if tasks is None:
             # All tasks not already completed/running/pending
@@ -572,18 +588,24 @@ class Workflow(object):
                         # skip completed dependency
                         continue
                     elif not dependencies and dep_name not in inputs:
-                        # skip dependency (only if the task does not require the dependency's output)
+                        """
+                        Skip because:
+                            - dependencies skipping is enabled
+                            - task does not take another task's output as input
+                        """
                         continue
                     else:
                         run_dependencies.add(dep_name)
 
             if run_dependencies:
+                # Found new dependencies to look up
                 to_run |= run_dependencies
                 to_lookup = run_dependencies
             else:
+                # No more dependencies
                 break
 
-        if to_run and not dry:
+        if not dry:
             to_run_insert = to_run - tasks_pending - tasks_running
 
             if to_run_insert:
@@ -597,23 +619,45 @@ class Workflow(object):
                     tuple(to_run_insert) + (self.id,)
                 )
 
+                # And insert new ones
                 cur.executemany(
                     """
                     INSERT INTO task (name, workflow_id, shared, create_time)
                     VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
                     """,
-                    ((task_name, self.id, 1 if share_runs else 0) for task_name in to_run_insert)
+                    ((task_name, self.id, 1 if share_runs else 0)
+                     for task_name in to_run_insert)
                 )
 
-            con.commit()
-
+        con.commit()
         cur.close()
         con.close()
 
         return self.sort_task(to_run)
 
-    def sort_task(self, tasks):
-        tasks = set(tasks)
+    def sort_task(self, tasks: Set[str]) -> Collection[str]:
+        """
+        Parse a tree of tasks where the roots are tasks without dependencies
+        and the leaves are the tasks with dependencies:
+
+                    A       B
+                  C  D     E
+                 F    G
+                  \  /      B -> E
+                   H        A -> C -> F
+                              -> D -> G
+                            (F + G) -> H
+
+        We iterate over all tasks in the tree:
+          - if a task does not have any dependency in the tree, it's taken out
+          - if a task has a dependency that is still in the tree, it's kept
+
+        e.g. A and B are removed at the 1st iteration,
+             leaving C, D, and E without an in-tree dependency:
+                -> they will be taken out at the next iteration
+
+        We continue until the tree is empty
+        """
         ordered = []
         while tasks:
             with_deps = set()
