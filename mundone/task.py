@@ -14,10 +14,10 @@ from subprocess import Popen, PIPE, DEVNULL
 from . import runner
 
 STATUSES = {
-    'pending': None,
-    'running': 1,
-    'success': 0,
-    'error': 2
+    "pending": None,
+    "running": 1,
+    "success": 0,
+    "error": 2
 }
 
 
@@ -44,8 +44,8 @@ class Task(object):
         self.args = args
         self.kwargs = kwargs
 
-        self.name = _kwargs.get('name', fn.__name__)
-        self.status = STATUSES['pending']
+        self.name = _kwargs.get("name", fn.__name__)
+        self.status = STATUSES["pending"]
         self.proc = None
         self.job_id = None
         self.input_f = None
@@ -201,12 +201,12 @@ class Task(object):
                 # Expected format: Job <job_id> is submitted to queue <queue>.
                 job_id = int(output.split('<')[1].split('>')[0])
             except (IndexError, ValueError):
-                self.status = STATUSES['error']
+                self.status = STATUSES["error"]
             else:
                 self.job_id = job_id
 
                 # not running, actually just submitted
-                self.status = STATUSES['running']
+                self.status = STATUSES["running"]
                 self._start_time = None
         else:
             cmd = [
@@ -219,7 +219,7 @@ class Task(object):
             out = open(self.stdout_f, "wt")
             err = open(self.stderr_f, "wt")
             self.proc = Popen(cmd, stdout=out, stderr=err)
-            self.status = STATUSES['running']
+            self.status = STATUSES["running"]
             self.log_files = (out, err)
             self._start_time = datetime.now()  # immediately started
 
@@ -234,18 +234,18 @@ class Task(object):
         else:
             return
 
-        self.status = STATUSES['error']
+        self.status = STATUSES["error"]
         time.sleep(3)
         self._collect()
 
     def is_running(self):
-        return self.ping() == STATUSES['running']
+        return self.ping() == STATUSES["running"]
 
     def is_success(self):
-        return self.ping() == STATUSES['success']
+        return self.ping() == STATUSES["success"]
 
     def is_terminated(self):
-        return self.ping() in (STATUSES['success'], STATUSES['error'])
+        return self.ping() in (STATUSES["success"], STATUSES["error"])
 
     def clean(self):
         for f in (self.stdout_f, self.stderr_f, self.input_f, self.output_f):
@@ -261,10 +261,10 @@ class Task(object):
             err.close()
             self.log_files = None
 
-        with open(self.stdout_f, 'rt') as fh:
+        with open(self.stdout_f, "rt") as fh:
             self.stdout = fh.read()
 
-        with open(self.stderr_f, 'rt') as fh:
+        with open(self.stderr_f, "rt") as fh:
             self.stderr = fh.read()
 
         try:
@@ -272,7 +272,7 @@ class Task(object):
         except FileNotFoundError as e:
             # If killed by scheduler: out will not exist
             self._output = None
-            self.status = STATUSES['error']
+            self.status = STATUSES["error"]
             self._end_time = datetime.now()
         else:
             # todo: use returncode to confirm status found by `ping()`
@@ -289,13 +289,13 @@ class Task(object):
         stderr_file = basepath + ".err"
         stdout_file = basepath + ".out"
 
-        with open(stderr_file, 'rt') as fh:
+        with open(stderr_file, "rt") as fh:
             stderr = fh.read()
 
-        with open(stdout_file, 'rt') as fh:
+        with open(stdout_file, "rt") as fh:
             stdout = fh.read()
 
-        with open(output_file, 'rb') as fh:
+        with open(output_file, "rb") as fh:
             output, returncode, start_time, end_time = pickle.load(fh)
 
         for f in (input_file, output_file, stderr_file, stdout_file):
@@ -308,14 +308,14 @@ class Task(object):
             returncode = self.proc.poll()
 
             if returncode is None:
-                self.status = STATUSES['running']
+                self.status = STATUSES["running"]
             else:
                 self._collect()
                 self.proc = None
                 if returncode == 0:
-                    self.status = STATUSES['success']
+                    self.status = STATUSES["success"]
                 else:
-                    self.status = STATUSES['error']
+                    self.status = STATUSES["error"]
         elif self.job_id is not None:
             cmd = ["bjobs", str(self.job_id)]
             output = Popen(
@@ -331,14 +331,14 @@ class Task(object):
                 if status == "DONE":
                     self._collect()
                     self.job_id = None
-                    self.status = STATUSES['success']
+                    self.status = STATUSES["success"]
                 elif status == "EXIT":
                     self._collect()
                     self.job_id = None
-                    self.status = STATUSES['error']
+                    self.status = STATUSES["error"]
                 else:
                     # PEND, RUN, UNKNOWN, etc.
-                    self.status = STATUSES['running']
+                    self.status = STATUSES["running"]
 
                     if status == "RUN" and self._start_time is None:
                         """
