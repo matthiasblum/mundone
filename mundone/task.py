@@ -333,7 +333,7 @@ class Task(object):
                     self.status = STATUSES["error"]
         elif self.job_id is not None:
             cmd = ["bjobs", str(self.job_id)]
-            outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL)
+            outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
             outs = outs.strip().decode()
 
             status = None
