@@ -9,7 +9,7 @@ import sys
 import time
 from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
-from typing import Collection, Optional, Set
+from typing import Callable, Collection, Optional, Set
 
 from . import runner
 
@@ -34,7 +34,7 @@ def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
 
 
 class Task(object):
-    def __init__(self, fn: function, args: Collection=[], kwargs: dict=dict(),
+    def __init__(self, fn: Callable, args: Collection=[], kwargs: dict=dict(),
                  **_kwargs):
 
         if not callable(fn):
