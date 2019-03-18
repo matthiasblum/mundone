@@ -373,7 +373,7 @@ class Task(object):
     def done(self) -> bool:
         return self.ping() in (STATUSES["success"], STATUSES["error"])
 
-    def kill(self):
+    def cancel(self):
         if self.proc is not None:
             self.proc.kill()
             self.proc = None
@@ -381,10 +381,27 @@ class Task(object):
             cmd = ["bkill", str(self.job_id)]
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
             self.job_id = None
+
+            """
+            Wait until the stdout file exists and is not empty
+            as LSF can take some time to flush the job report to the disk
+            """
+            while True:
+                n = 0
+                try:
+                    fh = open(self.stdout_f, "rt")
+                except FileNotFoundError:
+                    pass
+                else:
+                    n = len(fh.read())
+                finally:
+                    if n:
+                        break
+                    else:
+                        time.sleep(1)
         else:
             return
 
-        time.sleep(3)
         self.collect()
         self.status = STATUSES["error"]
 

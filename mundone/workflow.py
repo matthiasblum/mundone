@@ -686,7 +686,7 @@ class Workflow(object):
             runs_terminated = []
             for task_name, task in to_kill:
                 logging.info("\t- {}".format(task_name))
-                task.kill()
+                task.cancel()
                 runs_terminated.append((task_name, False))
 
             self.update_runs([], runs_terminated)
