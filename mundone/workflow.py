@@ -211,9 +211,9 @@ class Workflow(object):
                             keep_running = True
                             continue
 
-                    if task.is_terminated():
+                    if task.done():
                         # Completed
-                        if task.is_success():
+                        if task.successful():
                             logger.info("'{}' has been completed".format(task))
                             run["status"] = task.status
                             _resubmit = False
@@ -328,7 +328,7 @@ class Workflow(object):
                 times = [task.submit_time, task.start_time, task.end_time]
                 table.append((
                     task_name,
-                    task.get_status(),
+                    task.state,
                     *['' if t is None else t for t in times]
                 ))
 
@@ -678,7 +678,7 @@ class Workflow(object):
     def kill(self):
         to_kill = []
         for task_name, task in self.tasks.items():
-            if task.is_running():
+            if task.running():
                 to_kill.append((task_name, task))
 
         if to_kill:

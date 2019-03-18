@@ -49,7 +49,7 @@ class Task(object):
         self.kwargs = kwargs
 
         self.name = _kwargs.get("name", fn.__name__)
-        self._status = STATUSES["pending"]
+        self.status = STATUSES["pending"]
         self.proc = None
         self.job_id = None
         self.input_f = None
@@ -87,12 +87,6 @@ class Task(object):
 
     def __repr__(self) -> str:
         return self.name
-
-    @property
-    def status(self) -> str:
-        for name, value in STATUSES:
-            if self._status == value:
-                return name
 
     @property
     def inputs(self) -> Set[str]:
@@ -140,6 +134,12 @@ class Task(object):
             return self._submit_time.strftime("%Y-%m-%d %H:%M:%S")
         else:
             return None
+
+    @property
+    def state(self) -> str:
+        for name, value in STATUSES:
+            if self.status == value:
+                return name
 
     def pack(self, workdir: str) -> str:
         os.makedirs(workdir, exist_ok=True)
@@ -255,12 +255,12 @@ class Task(object):
                 # Expected format: Job <job_id> is submitted to queue <queue>.
                 job_id = int(outs.split('<')[1].split('>')[0])
             except (IndexError, ValueError):
-                self._status = STATUSES["error"]
+                self.status = STATUSES["error"]
             else:
                 self.job_id = job_id
 
                 # not running, actually just submitted
-                self._status = STATUSES["running"]
+                self.status = STATUSES["running"]
                 self._start_time = None
         else:
             cmd = [
@@ -273,7 +273,7 @@ class Task(object):
             outs = open(self.stdout_f, "wt")
             errs = open(self.stderr_f, "wt")
             self.proc = Popen(cmd, stdout=outs, stderr=errs)
-            self._status = STATUSES["running"]
+            self.status = STATUSES["running"]
             self.log_files = (outs, errs)
             self._start_time = datetime.now()  # immediately started
 
@@ -295,7 +295,7 @@ class Task(object):
         except FileNotFoundError:
             # Process/job: killed the output file might not exist
             self._output = None
-            self._status = STATUSES["error"]
+            self.status = STATUSES["error"]
             self._end_time = datetime.now()
         else:
             res = pickle.load(fh)
@@ -323,14 +323,14 @@ class Task(object):
             returncode = self.proc.poll()
 
             if returncode is None:
-                self._status = STATUSES["running"]
+                self.status = STATUSES["running"]
             else:
                 self.collect()
                 self.proc = None
                 if returncode == 0:
-                    self._status = STATUSES["success"]
+                    self.status = STATUSES["success"]
                 else:
-                    self._status = STATUSES["error"]
+                    self.status = STATUSES["error"]
         elif self.job_id is not None:
             cmd = ["bjobs", str(self.job_id)]
             outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL)
@@ -345,14 +345,14 @@ class Task(object):
                 if status == "DONE":
                     self.collect()
                     self.job_id = None
-                    self._status = STATUSES["success"]
+                    self.status = STATUSES["success"]
                 elif status == "EXIT":
                     self.collect()
                     self.job_id = None
-                    self._status = STATUSES["error"]
+                    self.status = STATUSES["error"]
                 else:
                     # PEND, RUN, UNKNOWN, etc.
-                    self._status = STATUSES["running"]
+                    self.status = STATUSES["running"]
 
                     if status == "RUN" and self._start_time is None:
                         """
@@ -362,7 +362,7 @@ class Task(object):
                         """
                         self._start_time = datetime.now()
 
-        return self._status
+        return self.status
 
     def running(self) -> bool:
         return self.ping() == STATUSES["running"]
@@ -386,11 +386,11 @@ class Task(object):
 
         time.sleep(3)
         self.collect()
-        self._status = STATUSES["error"]
+        self.status = STATUSES["error"]
 
     def update(self, **kwargs):
         try:
-            self._status = kwargs["status"]
+            self.status = kwargs["status"]
         except KeyError:
             pass
 
