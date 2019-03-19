@@ -137,7 +137,7 @@ class Task(object):
 
     @property
     def state(self) -> str:
-        for name, value in STATUSES:
+        for name, value in STATUSES.items():
             if self.status == value:
                 return name
 
