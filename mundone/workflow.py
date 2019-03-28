@@ -41,10 +41,7 @@ class Workflow(object):
 
         self.database = kwargs.get("db", os.path.join(self.workdir, DBNAME))
         if isinstance(self.database, str):
-            if not self.is_sqlite3(self.database):
-                raise RuntimeError("'{}' is not "
-                                   "an SQLite database".format(self.database))
-            elif not os.path.isfile(self.database):
+            if not os.path.isfile(self.database):
                 try:
                     open(self.database, "w").close()
                 except (FileNotFoundError, PermissionError):
@@ -53,6 +50,9 @@ class Workflow(object):
                                        "'{}'".format(self.database))
                 else:
                     os.remove(self.database)
+            elif not self.is_sqlite3(self.database):
+                raise RuntimeError("'{}' is not "
+                                   "an SQLite database".format(self.database))
 
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("Workflow() arg 1 must be a list or a tuple")
