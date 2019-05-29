@@ -131,7 +131,7 @@ class Workflow(object):
 
             cur.close()
 
-    def run(self, tasks: Optional[Collection[str]]=None, **kwargs):
+    def run(self, tasks: Optional[Collection[str]]=None, **kwargs) -> bool:
         # if 0: collect completed tasks, register runs and exit
         secs = kwargs.get("secs", 60)
 
@@ -159,18 +159,18 @@ class Workflow(object):
 
         to_run = self.register_runs(tasks, dependencies, resume, dry, not secs)
         if not to_run:
-            return
+            return True
         elif dry:
             sys.stderr.write("tasks to run:\n")
             for task_name in to_run:
                 sys.stderr.write("    * {}\n".format(task_name))
-            return
+            return True
         elif not secs:
             # We just register runs
             sys.stderr.write("tasks added:\n")
             for task_name in to_run:
                 sys.stderr.write("    * {}\n".format(task_name))
-            return
+            return True
 
         start_time = datetime.now()
 
