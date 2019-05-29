@@ -71,7 +71,7 @@ class Workflow(object):
                     email[k]
                 except KeyError:
                     raise KeyError(
-                        "'mail' excepts the 'host' and 'user' keys"
+                        "'mail' expects the 'host' and 'user' keys"
                     )
             self.email = email
         else:
