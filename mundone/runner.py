@@ -39,8 +39,9 @@ def main():
     with open(dst, "wb") as fh:
         pickle.dump((result, returncode, start_time, datetime.now()), fh)
 
-    sys.exit(returncode)
+    return returncode
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
+    
