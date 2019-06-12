@@ -66,6 +66,9 @@ class Task(object):
         self._start_time = None
         self._end_time = None
 
+        self._trust_scheduler = True
+        self._returncode = None
+
         if _kwargs.get("scheduler"):
             if isinstance(_kwargs["scheduler"], dict):
                 self.scheduler = _kwargs["scheduler"]
@@ -195,9 +198,11 @@ class Task(object):
         self.kwargs = kwargs
         return True
 
-    def run(self, workdir: str=os.getcwd()):
+    def run(self, workdir: str=os.getcwd(), trust_scheduler: bool=True):
         if not self.ready():
             return
+
+        self._trust_scheduler = trust_scheduler
 
         self._output = None
         self.stdout = None
@@ -302,10 +307,7 @@ class Task(object):
             fh.close()
 
             self._output = res[0]
-
-            # todo: use returncode to confirm status found by `ping()`
-            returncode = res[1]
-
+            self._returncode = res[1]
             self._start_time = res[2]
             self._end_time = res[3]
 
@@ -342,14 +344,18 @@ class Task(object):
             except IndexError:
                 pass
             finally:
-                if status == "DONE":
+                if status in ("DONE", "EXIT"):
                     self.collect()
                     self.job_id = None
-                    self.status = STATUSES["success"]
-                elif status == "EXIT":
-                    self.collect()
-                    self.job_id = None
-                    self.status = STATUSES["error"]
+                    if self._trust_scheduler:
+                        if status == "DONE":
+                            self.status = STATUSES["success"]
+                        else:
+                            self.status = STATUSES["error"]
+                    elif self._returncode == 0:
+                        self.status = STATUSES["success"]
+                    else:
+                        self.status = STATUSES["error"]
                 else:
                     # PEND, RUN, UNKNOWN, etc.
                     self.status = STATUSES["running"]
