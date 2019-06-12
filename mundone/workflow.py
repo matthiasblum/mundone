@@ -147,6 +147,9 @@ class Workflow(object):
         # max times a task is resubmitted if it fails (-1: unlimited)
         resubmit = kwargs.get("resubmit", 0)
 
+        # whether we trust the job scheduler's status
+        trust = kwargs.get("trust", True)
+
         if tasks is None:
             pass
         elif isinstance(tasks, (list, tuple)):
@@ -254,7 +257,7 @@ class Workflow(object):
                             flag |= 2
                         elif dep_name in failures:
                             """
-                            dependencies failed, 
+                            dependencies failed,
                             but then completed successfully
                             """
                             failures.remove(dep_name)
@@ -271,7 +274,7 @@ class Workflow(object):
                     else:
                         # Ready!
                         logger.info("'{}' is running".format(task))
-                        task.run(self.workdir)
+                        task.run(workdir=self.workdir, trust_scheduler=trust)
                         tasks_started.append(task_name)
                         tries[task_name] += 1
                         keep_running = True
