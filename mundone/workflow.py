@@ -66,13 +66,8 @@ class Workflow(object):
 
         email = kwargs.get("mail")
         if isinstance(email, dict):
-            for k in ("host", "user"):
-                try:
-                    email[k]
-                except KeyError:
-                    raise KeyError(
-                        "'mail' expects the 'host' and 'user' keys"
-                    )
+            if not all([k in email for k in ("host", "user")]):
+                raise KeyError("'mail' expects the 'host' and 'user' keys")
             self.email = email
         else:
             self.email = None
@@ -131,7 +126,7 @@ class Workflow(object):
 
             cur.close()
 
-    def run(self, tasks: Optional[Collection[str]]=None, **kwargs) -> bool:
+    def run(self, names: Optional[Collection[str]]=None, **kwargs) -> bool:
         # if 0: collect completed tasks, register runs and exit
         secs = kwargs.get("secs", 60)
 
@@ -150,17 +145,17 @@ class Workflow(object):
         # whether we trust the job scheduler's status
         trust = kwargs.get("trust", True)
 
-        if tasks is None:
+        if names is None:
             pass
-        elif isinstance(tasks, (list, tuple)):
-            for task_name in tasks:
+        elif isinstance(names, (list, tuple)):
+            for task_name in names:
                 if task_name not in self.tasks:
                     raise RuntimeError("invalid task name: "
                                        "'{}'".format(task_name))
         else:
             raise TypeError("run() arg 1 must be a list, a tuple, or None")
 
-        to_run = self.register_runs(tasks, dependencies, resume, dry, not secs)
+        to_run = self.register_runs(names, dependencies, resume, dry, not secs)
         if not to_run:
             return True
         elif dry:
@@ -384,7 +379,8 @@ class Workflow(object):
                       status = ?,
                       input_file = ?,
                       output_file = ?,
-                      submit_time = ?
+                      submit_time = ?,
+                      locked = 0
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
                     (task.pid, STATUSES["running"],
@@ -404,7 +400,8 @@ class Workflow(object):
                       stdout = ?,
                       stderr = ?,
                       start_time = ?,
-                      end_time = ?
+                      end_time = ?,
+                      locked = 0
                     WHERE name = ? AND active = 1 AND workflow_id = ?
                     """,
                     (task.status, json.dumps(task.output.read()),
@@ -481,7 +478,7 @@ class Workflow(object):
             )
             cur.close()
 
-    def register_runs(self, tasks: Optional[Collection[str]],
+    def register_runs(self, names: Optional[Collection[str]],
                       dependencies: bool=True, resume: bool=False,
                       dry: bool=False, share_runs: bool=False
                       ) -> Collection[str]:
@@ -492,8 +489,7 @@ class Workflow(object):
             SELECT name, status, locked, input_file, output_file
             FROM task
             WHERE active = 1 AND workflow_id = ?
-            """,
-            (self.id,)
+            """, (self.id,)
         )
 
         tasks_success = set()
@@ -555,7 +551,7 @@ class Workflow(object):
                  task.end_time, task_name, self.id)
             )
 
-        if tasks is None:
+        if names is None:
             # All tasks not already completed/running/pending
             to_run = set()
             for task_name in self.tasks:
@@ -567,11 +563,10 @@ class Workflow(object):
                     to_run.add(task_name)
         else:
             # Run passed tasks
-            to_run = set(tasks)
-
-        to_lookup = to_run
+            to_run = set(names)
 
         # Add dependencies
+        to_lookup = to_run
         while True:
             run_dependencies = set()
 
@@ -608,29 +603,29 @@ class Workflow(object):
                 # No more dependencies
                 break
 
-        if not dry:
-            to_run_insert = to_run - tasks_pending - tasks_running
+        if dry:
+            # We don't want to display already running tasks
+            to_run -= tasks_running
+        else:
+            to_insert = to_run - (tasks_pending | tasks_running)
+            if to_insert:
+                # Insert tasks not already pending/running
+                for task_name in to_insert:
+                    cur.execute(
+                        """
+                        UPDATE task
+                        SET active = 0, locked = 0
+                        WHERE name = ? AND workflow_id = ?
+                        """, (task_name, self.id)
+                    )
 
-            if to_run_insert:
-                # Update runs
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET active = 0
-                    WHERE name in ({}) AND workflow_id = ?
-                    """.format(','.join(['?' for _ in to_run_insert])),
-                    tuple(to_run_insert) + (self.id,)
-                )
-
-                # And insert new ones
-                cur.executemany(
-                    """
-                    INSERT INTO task (name, workflow_id, shared, create_time)
-                    VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
-                    """,
-                    ((task_name, self.id, 1 if share_runs else 0)
-                     for task_name in to_run_insert)
-                )
+                    cur.execute(
+                        """
+                        INSERT INTO task (
+                          name, workflow_id, shared, create_time
+                        ) VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
+                        """, (task_name, self.id, 1 if share_runs else 0)
+                    )
 
         con.commit()
         cur.close()
