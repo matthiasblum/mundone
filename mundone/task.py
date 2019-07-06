@@ -3,22 +3,25 @@
 import inspect
 import os
 import pickle
-import struct
-import tempfile
 import sys
 import time
 from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
-from typing import Callable, Collection, Optional, Set
+from tempfile import mkdtemp, mkstemp
+from typing import Callable, Optional, Set, Union
 
 from . import runner
 
-STATUSES = {
-    "pending": None,
-    "running": 1,
-    "success": 0,
-    "error": 2
-}
+STATUS_PENDING = None
+STATUS_RUNNING = 1
+STATUS_SUCCESS = 0
+STATUS_ERROR = 2
+STATUS_CANCELLED = 3
+
+SUFFIX_INPUT = ".in.p"
+SUFFIX_RESULT = ".out.p"
+SUFFIX_STDOUT = ".out"
+SUFFIX_STDERR = ".err"
 
 
 def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
@@ -34,9 +37,8 @@ def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
 
 
 class Task(object):
-    def __init__(self, fn: Callable, args: Collection=[], kwargs: dict=dict(),
-                 **_kwargs):
-
+    def __init__(self, fn: Callable, args: Union[list, tuple]=list(),
+                 kwargs: dict=dict(), **_kwargs):
         if not callable(fn):
             raise TypeError("'{}' is not callable".format(fn))
         elif not isinstance(args, (list, tuple)):
@@ -49,25 +51,27 @@ class Task(object):
         self.kwargs = kwargs
 
         self.name = _kwargs.get("name", fn.__name__)
-        self.status = STATUSES["pending"]
+        self.status = STATUS_PENDING
+        self.basepath = None
+
+        # Local process
         self.proc = None
-        self.job_id = None
-        self.input_f = None
-        self.output_f = None
-        self.stdout_f = None
-        self.stderr_f = None
-        self.log_files = None  # (stdout, stderr) file handlers (local job)
+        self.file_handlers = None # tuple of file handlers (stdout, stderr)
+
+        # LSF job
+        self.jobid = None
 
         self.stdout = None
         self.stderr = None
-        self._output = None
+        self.result = None
 
+        self._create_time = None
         self._submit_time = None
         self._start_time = None
         self._end_time = None
 
-        self._trust_scheduler = True
-        self._returncode = None
+        self.returncode = None
+        self.trust_scheduler = True
 
         if _kwargs.get("scheduler"):
             if isinstance(_kwargs["scheduler"], dict):
@@ -77,16 +81,20 @@ class Task(object):
         else:
             self.scheduler = None
 
-        if isinstance(_kwargs.get("requires"), (tuple, list)):
-            requires = self.inputs
-            for dep in set(_kwargs["requires"]):
-                if isinstance(dep, Task):
-                    requires.add(dep.name)
-                else:
-                    requires.add(dep)
-            self.requires = requires
-        else:
-            self.requires = self.inputs
+        requires = _kwargs.get("requires", [])
+        if not isinstance(requires, (dict, list, set, tuple)):
+            raise TypeError("'requires' must of one of these types: "
+                            "dict, list, set, tuple")
+
+        self.requires = self.inputs
+        for dep in set(requires):
+            if isinstance(dep, Task):
+                self.requires.add(dep.name)
+            elif isinstance(dep, str):
+                self.requires.add(dep)
+            else:
+                raise TypeError("'requires' must be a sequence "
+                                "of strings or Tasks")
 
     def __repr__(self) -> str:
         return self.name
@@ -109,7 +117,7 @@ class Task(object):
         return TaskOutput(self)
 
     @property
-    def pid(self) -> Optional[int]:
+    def id(self) -> Optional[int]:
         if self.proc is not None:
             return self.proc.pid
         elif self.job_id is not None:
@@ -118,39 +126,81 @@ class Task(object):
             return None
 
     @property
-    def start_time(self) -> Optional[str]:
-        if self._start_time:
-            return self._start_time.strftime("%Y-%m-%d %H:%M:%S")
+    def submit_time(self) -> Optional[str]:
+        return self._submit_time
+
+    @submit_time.setter
+    def submit_time(self, value):
+        if isinstance(value, str):
+            self._submit_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         else:
+            self._submit_time = value
+
+    @property
+    def submit_time_str(self) -> Optional[str]:
+        try:
+            return self.submit_time.strftime("%Y-%m-%d %H:%M:%S")
+        except AttributeError:
+            return None
+
+    @property
+    def start_time(self) -> Optional[str]:
+        return self._start_time
+
+    @start_time.setter
+    def start_time(self, value):
+        if isinstance(value, str):
+            self._start_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        else:
+            self._start_time = value
+
+    @property
+    def start_time_str(self) -> Optional[str]:
+        try:
+            return self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        except AttributeError:
             return None
 
     @property
     def end_time(self) -> Optional[str]:
-        if self._end_time:
-            return self._end_time.strftime("%Y-%m-%d %H:%M:%S")
+        return self._end_time
+
+    @end_time.setter
+    def end_time(self, value):
+        if isinstance(value, str):
+            self._end_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         else:
-            return None
+            self._end_time = value
 
     @property
-    def submit_time(self) -> Optional[str]:
-        if self._submit_time:
-            return self._submit_time.strftime("%Y-%m-%d %H:%M:%S")
-        else:
+    def end_time_str(self) -> Optional[str]:
+        try:
+            return self.end_time.strftime("%Y-%m-%d %H:%M:%S")
+        except AttributeError:
             return None
 
     @property
     def state(self) -> str:
-        for name, value in STATUSES.items():
-            if self.status == value:
-                return name
+        if self.status == STATUS_PENDING:
+            return "pending"
+        elif self.status == STATUS_RUNNING:
+            return "running"
+        elif self.status == STATUS_ERROR:
+            return "failed"
+        elif self.status == STATUS_CANCELLED:
+            return "cancelled"
+        elif self.status == STATUS_SUCCESS:
+            return "done"
 
-    def pack(self, workdir: str) -> str:
+    def _pack(self, workdir: str):
         os.makedirs(workdir, exist_ok=True)
 
-        self.input_f = mktemp(prefix=self.name, suffix=".in.p", dir=workdir)
-        self.output_f = self.input_f[:-5] + ".out.p"
+        fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
+        os.close(fd)
+        os.remove(self.basepath)
 
-        with open(self.input_f, "wb") as fh:
+        input_file = self.basepath + SUFFIX_INPUT
+        with open(input_file, "wb") as fh:
             module = inspect.getmodule(self.fn)
             module_path = module.__file__
             module_name = module.__name__
@@ -164,14 +214,9 @@ class Task(object):
                 module_name = os.path.basename(sys.argv[0]).rsplit('.', 1)[0]
                 p = p.replace(b"c__main__", b"c" + module_name.encode())
 
-            fh.write(struct.pack(
-                "<2I{}s{}s".format(len(module_path), len(module_name)),
-                len(module_path), len(module_name), module_path.encode(), module_name.encode()
-            ))
-
-            fh.write(p)
-
-        return self.input_f[:-5]
+            pickle.dump(module_path.encode(), fh)
+            pickle.dump(module_name.encode(), fh)
+            pickle.dump(p, fh)
 
     def ready(self) -> bool:
         args = []
@@ -198,27 +243,26 @@ class Task(object):
         self.kwargs = kwargs
         return True
 
-    def run(self, workdir: str=os.getcwd(), trust_scheduler: bool=True):
-        if not self.ready():
+    def start(self, workdir: str=os.getcwd(), trust_scheduler: bool=True):
+        if self.running(update=False) or not self.ready():
             return
 
-        self._trust_scheduler = trust_scheduler
-
-        self._output = None
-        self.stdout = None
-        self.stderr = None
-        self._end_time = None
-
-        basepath = self.pack(workdir)
-        self.stdout_f = basepath + ".out"
-        self.stderr_f = basepath + ".err"
-        self._submit_time = datetime.now()
+        self._pack(workdir)
+        stdout_file = self.basepath + SUFFIX_STDOUT
+        stderr_file = self.basepath + SUFFIX_STDERR
+        input_file = self.basepath + SUFFIX_INPUT
+        result_file = self.basepath + SUFFIX_RESULT
+        self.trust_scheduler = trust_scheduler
+        self.proc = self.jobid = self.file_handlers = None
 
         if isinstance(self.scheduler, dict):
             cmd = ["bsub", "-J", self.name]
 
             if isinstance(self.scheduler.get("queue"), str):
                 cmd += ["-q", self.scheduler["queue"]]
+
+            if isinstance(self.scheduler.get("project"), str):
+                cmd += ["-P", self.scheduler["project"]]
 
             num_cpus = self.scheduler.get("cpu")
             if isinstance(num_cpus, int) and num_cpus > 1:
@@ -246,218 +290,173 @@ class Task(object):
                     "-R", "rusage[scratch={}]".format(tmp)
                 ]
 
-            cmd += ["-o", self.stdout_f, "-e", self.stderr_f]
+            cmd += ["-o", stdout_file, "-e", stderr_file]
             cmd += [
                 sys.executable,
                 os.path.realpath(runner.__file__),
-                self.input_f,
-                self.output_f
+                input_file,
+                result_file
             ]
 
             outs, errs = Popen(cmd, stdout=PIPE).communicate()
             outs = outs.strip().decode()
-            try:
-                # Expected format: Job <job_id> is submitted to queue <queue>.
-                job_id = int(outs.split('<')[1].split('>')[0])
-            except (IndexError, ValueError):
-                self.status = STATUSES["error"]
-            else:
-                self.job_id = job_id
 
-                # not running, actually just submitted
-                self.status = STATUSES["running"]
-                self._start_time = None
+            # Expected format: Job <job_id> is submitted to queue <queue>.
+            self.jobid = int(outs.split('<')[1].split('>')[0])
         else:
             cmd = [
                 sys.executable,
                 os.path.realpath(runner.__file__),
-                self.input_f,
-                self.output_f
+                input_file,
+                result_file
             ]
 
-            outs = open(self.stdout_f, "wt")
-            errs = open(self.stderr_f, "wt")
-            self.proc = Popen(cmd, stdout=outs, stderr=errs)
-            self.status = STATUSES["running"]
-            self.log_files = (outs, errs)
-            self._start_time = datetime.now()  # immediately started
+            fh_out = open(stdout_file, "wt")
+            fh_err = open(stderr_file, "wt")
+            self.proc = Popen(cmd, stdout=fh_out, stderr=fh_err)
+            self.file_handlers = (fh_out, fh_err)
 
-    def collect(self):
-        if self.log_files:
-            outs, errs = self.log_files
-            outs.close()
-            errs.close()
-            self.log_files = None
+        self.status = STATUS_RUNNING  # actually not running: submitted
+        self.submit_time = datetime.now()
+        self.start_time = self.end_time = None
 
-        with open(self.stdout_f, "rt") as fh:
-            self.stdout = fh.read()
+    def wait(self, seconds: int=60):
+        while not self.done():
+            time.sleep(seconds)
 
-        with open(self.stderr_f, "rt") as fh:
-            self.stderr = fh.read()
+    def _collect(self) -> Optional[int]:
+        if self.file_handlers:
+            fh_out, fh_err = self.file_handlers
+            fh_out.close()
+            fh_err.close()
+            self.file_handlers = None
 
         try:
-            fh = open(self.output_f, "rb")
-        except FileNotFoundError:
+            fh = open(self.basepath + SUFFIX_STDOUT, "rt")
+        except (FileNotFoundError, TypeError):
+            pass
+        else:
+            self.stdout = fh.read()
+            fh.close()
+            os.remove(self.basepath + SUFFIX_STDOUT)
+
+        try:
+            fh = open(self.basepath + SUFFIX_STDERR, "rt")
+        except (FileNotFoundError, TypeError):
+            pass
+        else:
+            self.stderr = fh.read()
+            fh.close()
+            os.remove(self.basepath + SUFFIX_STDERR)
+
+        try:
+            os.remove(self.basepath + SUFFIX_INPUT)
+        except (FileNotFoundError, TypeError):
+            pass
+
+        returncode = None
+        try:
+            fh = open(self.basepath + SUFFIX_RESULT, "rb")
+        except (FileNotFoundError, TypeError):
             # Process/job: killed the output file might not exist
-            self._output = None
-            self.status = STATUSES["error"]
-            self._end_time = datetime.now()
+            self.result = None
+            self.status = STATUS_ERROR
+            self.end_time = datetime.now()
         else:
             res = pickle.load(fh)
             fh.close()
+            os.remove(self.basepath + SUFFIX_RESULT)
 
-            self._output = res[0]
-            self._returncode = res[1]
-            self._start_time = res[2]
-            self._end_time = res[3]
+            self.result = res[0]
+            returncode = res[1]
+            self.start_time = res[2]
+            self.end_time = res[3]
 
-        self.clean()
+        return returncode
 
-    def clean(self):
-        for f in (self.stdout_f, self.stderr_f, self.input_f, self.output_f):
-            try:
-                os.remove(f)
-            except FileNotFoundError:
-                pass
+    def _update_status(self):
+        if self.status != STATUS_RUNNING:
+            return
 
-    def ping(self) -> int:
         if self.proc is not None:
             returncode = self.proc.poll()
-
-            if returncode is None:
-                self.status = STATUSES["running"]
-            else:
-                self.collect()
+            if returncode is not None:
+                self._collect()
                 self.proc = None
                 if returncode == 0:
-                    self.status = STATUSES["success"]
+                    self.status = STATUS_SUCCESS
                 else:
-                    self.status = STATUSES["error"]
-        elif self.job_id is not None:
-            cmd = ["bjobs", str(self.job_id)]
+                    self.status = STATUS_ERROR
+        elif self.jobid is not None:
+            cmd = ["bjobs", str(self.jobid)]
             outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
             outs = outs.strip().decode()
-
             status = None
+
             try:
                 status = outs.splitlines()[1].split()[2]
             except IndexError:
                 pass
             finally:
                 if status in ("DONE", "EXIT"):
-                    self.collect()
-                    self.job_id = None
-                    if self._trust_scheduler:
+                    returncode = self._collect()
+                    self.jobid = None
+                    if self.trust_scheduler:
                         if status == "DONE":
-                            self.status = STATUSES["success"]
+                            self.status = STATUS_SUCCESS
                         else:
-                            self.status = STATUSES["error"]
-                    elif self._returncode == 0:
-                        self.status = STATUSES["success"]
+                            self.status = STATUS_ERROR
+                    elif returncode == 0:
+                        self.status = STATUS_SUCCESS
                     else:
-                        self.status = STATUSES["error"]
-                else:
-                    # PEND, RUN, UNKNOWN, etc.
-                    self.status = STATUSES["running"]
+                        self.status = STATUS_ERROR
+        elif self.basepath and os.path.isfile(self.basepath + SUFFIX_RESULT):
+            returncode = self._collect()
+            self.status = STATUS_SUCCESS if returncode == 0 else STATUS_ERROR
 
-                    if status == "RUN" and self._start_time is None:
-                        """
-                        First time we see the status as running
-                        Keep this time for now,
-                        it will be updated from the output file
-                        """
-                        self._start_time = datetime.now()
+    def running(self, update: bool=True) -> bool:
+        if update:
+            self._update_status()
+        return self.status == STATUS_RUNNING
 
-        return self.status
+    def successful(self, update: bool=True) -> bool:
+        if update:
+            self._update_status()
+        return self.status == STATUS_SUCCESS
 
-    def running(self) -> bool:
-        return self.ping() == STATUSES["running"]
+    def done(self, update: bool=True) -> bool:
+        if update:
+            self._update_status()
+        return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
 
-    def successful(self) -> bool:
-        return self.ping() == STATUSES["success"]
-
-    def done(self) -> bool:
-        return self.ping() in (STATUSES["success"], STATUSES["error"])
-
-    def cancel(self):
+    def terminate(self):
         if self.proc is not None:
             self.proc.kill()
             self.proc = None
-        elif self.job_id is not None:
-            cmd = ["bkill", str(self.job_id)]
+        elif self.jobid is not None:
+            cmd = ["bkill", str(self.jobid)]
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
-            self.job_id = None
+            self.jobid = None
 
             """
             Wait until the stdout file exists and is not empty
             as LSF can take some time to flush the job report to the disk
             """
             while True:
-                n = 0
                 try:
-                    fh = open(self.stdout_f, "rt")
+                    fh = open(self.basepath + SUFFIX_STDOUT, "rt")
                 except FileNotFoundError:
-                    pass
+                    n = 0
                 else:
                     n = len(fh.read())
+                    fh.close()
                 finally:
+                    time.sleep(1)
                     if n:
                         break
-                    else:
-                        time.sleep(1)
-        else:
-            return
 
-        self.collect()
-        self.status = STATUSES["error"]
-
-    def update(self, **kwargs):
-        try:
-            self.status = kwargs["status"]
-        except KeyError:
-            pass
-
-        try:
-            self._output = kwargs["output"]
-        except KeyError:
-            pass
-
-        try:
-            self.stdout = kwargs["stdout"]
-        except KeyError:
-            pass
-
-        try:
-            self.stderr = kwargs["stderr"]
-        except KeyError:
-            pass
-
-        try:
-            self.input_f = kwargs["input_file"]
-        except KeyError:
-            pass
-
-        try:
-            self.output_f = kwargs["output_file"]
-        except KeyError:
-            pass
-
-        try:
-            self._start_time = kwargs["start_time"]
-        except KeyError:
-            pass
-
-        try:
-            self._end_time = kwargs["end_time"]
-        except KeyError:
-            pass
-
-        try:
-            self.job_id = kwargs["job_id"]
-        except KeyError:
-            self.job_id = None
-        finally:
-            self.proc = None
+        self._collect()
+        self.status = STATUS_CANCELLED
 
     @staticmethod
     def collect_alt(output_file: str) -> tuple:
@@ -489,7 +488,7 @@ class TaskOutput(object):
         return self._task.done()
 
     def read(self):
-        return self._task._output
+        return self._task.result
 
     @property
     def task(self) -> str:

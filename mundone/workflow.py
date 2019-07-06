@@ -9,10 +9,12 @@ import sys
 from datetime import datetime
 from email.message import EmailMessage
 from smtplib import SMTP
-from typing import Collection, Optional, Set
+from tempfile import mkstemp
+from typing import Any, Collection, Dict, List, Optional, Set, Tuple
 
-from mundone import __version__
-from .task import STATUSES, Task
+from . import __version__
+from .task import *
+
 
 logger = logging.getLogger("mundone")
 logger.setLevel(logging.INFO)
@@ -34,25 +36,33 @@ class Workflow(object):
         self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
         if not isinstance(self.id, str):
-            raise ValueError("'id' expects a str")
+            raise ValueError("'id' expects a string")
 
-        self.workdir = kwargs.get("dir", os.getcwd())
-        os.makedirs(self.workdir, exist_ok=True)
+        self.dir = kwargs.get("dir", os.getcwd())
+        os.makedirs(self.dir, exist_ok=True)
 
-        self.database = kwargs.get("db", os.path.join(self.workdir, DBNAME))
-        if isinstance(self.database, str):
-            if not os.path.isfile(self.database):
-                try:
-                    open(self.database, "w").close()
-                except (FileNotFoundError, PermissionError):
-                    # Cannot create file
-                    raise RuntimeError("Cannot create database "
-                                       "'{}'".format(self.database))
-                else:
-                    os.remove(self.database)
-            elif not self.is_sqlite3(self.database):
-                raise RuntimeError("'{}' is not "
-                                   "an SQLite database".format(self.database))
+        database = kwargs.get("db")
+        if database:
+            self.database = database
+            self.temporary = False
+        else:
+            fd, self.database = mkstemp()
+            os.close(fd)
+            os.remove(self.database)
+            self.temporary = True
+
+        if not os.path.isfile(self.database):
+            try:
+                open(self.database, "w").close()
+            except (FileNotFoundError, PermissionError):
+                # Cannot create file
+                raise RuntimeError("Cannot create database "
+                                   "'{}'".format(self.database))
+            else:
+                os.remove(self.database)
+        elif not self.is_sqlite3(self.database):
+            raise RuntimeError("'{}' is not "
+                               "an SQLite database".format(self.database))
 
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("Workflow() arg 1 must be a list or a tuple")
@@ -66,8 +76,11 @@ class Workflow(object):
 
         email = kwargs.get("mail")
         if isinstance(email, dict):
-            if not all([k in email for k in ("host", "user")]):
-                raise KeyError("'mail' expects the 'host' and 'user' keys")
+            for k in ("host", "user"):
+                try:
+                    email[k]
+                except KeyError:
+                    raise KeyError(f"missing '{k}' key in 'mail'")
             self.email = email
         else:
             self.email = None
@@ -75,19 +88,23 @@ class Workflow(object):
         self.daemon = kwargs.get("daemon", False)
 
         self.tasks = {t.name: t for t in tasks}
-        self.init_database()
-        self.active = True
+        for n, t in self.tasks.items():
+            for nd in t.requires:
+                if nd not in self.tasks:
+                    raise ValueError(f"'{n}' requires an unknow task ('{nd}')")
+
+        self._init_database()
+        self._load_tasks(update=True)
+        self._running = False
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self.daemon:
-            self.kill()
+        self.close()
 
     def __del__(self):
-        if not self.daemon:
-            self.kill()
+        self.close()
 
     @staticmethod
     def is_sqlite3(database: str) -> bool:
@@ -97,23 +114,20 @@ class Workflow(object):
         with open(database, "rb") as fh:
             return fh.read(16).decode() == "SQLite format 3\x00"
 
-    def init_database(self):
+    def _init_database(self):
         with sqlite3.connect(self.database) as con:
-            cur = con.cursor()
-
-            cur.execute(
+            con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS task (
-                  pid INTEGER DEFAULT NULL,
                   name TEXT NOT NULL,
-                  workflow_id TEXT NOT NULL,
+                  pid INTEGER DEFAULT NULL,
+                  wid TEXT NOT NULL,
                   active INTEGER NOT NULL DEFAULT 1,
                   locked INTEGER NOT NULL DEFAULT 0,
                   shared INTEGER NOT NULL DEFAULT 0,
                   status INTEGER DEFAULT NULL,
-                  input_file TEXT DEFAULT NULL,
-                  output_file TEXT DEFAULT NULL,
-                  output TEXT DEFAULT NULL,
+                  basepath TEXT DEFAULT NULL,
+                  result TEXT NOT NULL,
                   stdout TEXT DEFAULT NULL,
                   stderr TEXT DEFAULT NULL,
                   create_time TEXT NOT NULL,
@@ -123,51 +137,471 @@ class Workflow(object):
                 )
                 """
             )
+            con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
+    def _load_tasks(self, exclude: Collection[str]=list(),
+                    update: bool=False) -> List[Task]:
+        with sqlite3.connect(self.database) as con:
+            cur = con.execute(
+                """
+                SELECT name, pid, status, basepath, result, stdout, stderr,
+                       submit_time, start_time, end_time
+                FROM task
+                WHERE wid = ? AND active = 1
+                """, (self.id,)
+            )
+
+            for row in cur:
+                name = row[0]
+                try:
+                    task = self.tasks[name]
+                except KeyError:
+                    continue
+
+                if name in exclude:
+                    continue
+                elif row[1] is not None and row[1] < 0:
+                    task.jobid = abs(row[1])
+                task.status = row[2]
+                task.basepath = row[3]
+                task.result = json.loads(row[4])
+                task.stdout = row[5]
+                task.stderr = row[6]
+                task.submit_time = row[7]
+                task.start_time = row[8]
+                task.end_time = row[9]
+
+            if update:
+                changes = []
+                for task in self.tasks.values():
+                    if task.running(update=False) and task.done():
+                        # Task flagged as running in DB, but now is done
+                        changes.append((
+                            task.status,
+                            json.dumps(task.result),
+                            task.stdour,
+                            task.stderr,
+                            task.submit_time_str,
+                            task.start_time_str,
+                            task.end_time_str,
+                            task.name,
+                            self.id
+                        ))
+
+                if changes:
+                    cur.executemany(
+                        """
+                        UPDATE task
+                        SET status = ?, result = ?, stdout = ?, stderr = ?,
+                            submit_time = ?, start_time = ?, end_time = ?
+                        WHERE name = ? AND id = ? AND active = 1
+                        """, changes
+                    )
+                    con.commit()
             cur.close()
 
-    def run(self, names: Optional[Collection[str]]=None, **kwargs) -> bool:
-        # if 0: collect completed tasks, register runs and exit
-        secs = kwargs.get("secs", 60)
-
-        # whether or not run dependencies
+    def start(self, tasks: Optional[Collection[str]]=None, **kwargs) -> bool:
+        # If 0: collect completed tasks, register runs and exit
+        seconds = kwargs.get("seconds", 10)
+        # If True: run dependencies if not explicitly called
         dependencies = kwargs.get("dependencies", True)
-
-        # whether or not skip already completed tasks
+        # If True: skip completed tasks
         resume = kwargs.get("resume", False)
-
         # If True: show tasks about to be run and quit
         dry = kwargs.get("dry", False)
-
-        # max times a task is resubmitted if it fails (-1: unlimited)
+        # Max times a task is resubmitted if it fails (-1: unlimited)
         resubmit = kwargs.get("resubmit", 0)
-
-        # whether we trust the job scheduler's status
+        # If True: trust job scheduler's status
         trust = kwargs.get("trust", True)
 
-        if names is None:
-            pass
-        elif isinstance(names, (list, tuple)):
-            for task_name in names:
-                if task_name not in self.tasks:
-                    raise RuntimeError("invalid task name: "
-                                       "'{}'".format(task_name))
+        if tasks is None:
+            tasks = set(self.tasks.keys())
+        elif isinstance(tasks, (list, tuple)):
+            for name in tasks:
+                try:
+                    t = self.tasks[name]
+                except KeyError:
+                    raise ValueError(f"invalid task name: {name}")
+            tasks = set(tasks)
         else:
-            raise TypeError("run() arg 1 must be a list, a tuple, or None")
+            raise TypeError("start() arg 1 must be a list, a tuple, or None")
 
+        to_run = self._init_runs(tasks, dependencies, resume, dry)
+        if not to_run:
+            return True
+        elif dry:
+            sys.stderr.write("task(s) to run:\n")
+            for name in to_run:
+                sys.stderr.write(f"  * {name}\n")
+            return True
+        elif not seconds:
+            sys.stderr.write("task(s) added:\n")
+            for name in to_run:
+                sys.stderr.write(f"  * {name}\n")
+            return True
+
+        self._running = True
+        return self.runn(to_run, trust, seconds, resubmit)
+
+    def runn(self, pending: List[str], trust: bool, seconds: int, resubmit: int) -> bool:
+        start_time = datetime.now()
+        parent2children = {}
+        child2parents = {}
+        attempts = {}
+        for name in pending:
+            parent2children[name] = set()
+            child2parents[name] = set()
+            attempts[name] = 0
+
+        for name in pending:
+            for depname in self.tasks[name].requires:
+                if depname in pending:
+                    parent2children[depname].add(name)
+                    child2parents[name].add(depname)
+
+        pending = set(pending)
+        running = {}
+        for name in pending:
+            if all([parent not in pending for parent in child2parents[name]]):
+                task = self.tasks[name]
+                task.start(workdir=self.dir, trust_scheduler=trust)
+                self._persit(task)
+                running[name] = task
+                attempts[name] += 1
+                logger.info(f"{name:<20} running")
+
+        pending -= set(running)
+        completed = set()
+        failed = set()
+        while True:
+            for name, task in running.items():
+                if not task.done():
+                    continue
+                elif task.successful():
+                    logger.info(f"{name:<20} done")
+                    completed.add(name)
+                    self._persit(task)
+                elif attempts[name] <= resubmit:
+                    logger.error(f"{name:<20} failed: retry")
+                    self._persit(task, new=True)
+                    task.start(workdir=self.dir, trust_scheduler=trust)
+                    self._persit(task)
+                    attempts[name] += 1
+                else:
+                    logger.error(f"{name:<20} failed")
+                    failed.add(name)
+                    self._persit(task)
+
+            _running = {}
+            for name, task in running.items():
+                if name not in completed and name not in failed:
+                    _running[name] = task
+            running = _running
+
+            for name in pending:
+                pending_parents = []
+                for parent in child2parents[name]:
+                    if parent in failed:
+                        # Cancel child
+                        task = self.tasks[name]
+                        task.terminate()
+                        self._persit(task)
+                        failed.add(name)
+                        logger.error(f"{name:<20} cancelled")
+                        break
+                    elif parent not in completed:
+                        pending_parents.append(parent)
+                else:
+                    if not pending_parents:
+                        task = self.tasks[name]
+                        task.start(workdir=self.dir, trust_scheduler=trust)
+                        self._persit(task)
+                        running[name] = task
+                        attempts[name] += 1
+                        logger.info(f"{name:<20} running")
+
+            pending -= set(running) | failed
+            self._load_tasks(exclude=running, update=False)
+            if not running and not pending:
+                break
+            time.sleep(seconds)
+
+        self._running = False
+        if failed:
+            failed = ", ".join(sorted(failed))
+            logger.error("workflow could not complete "
+                         "because one or more tasks failed: "
+                         f"{failed}")
+            success = False
+        else:
+            logger.info("workflow completed successfully")
+            success = True
+
+        print(self.email)
+        if self.email:
+            status = "success" if success else "error"
+            if self.name:
+                subject = f"[{self.name}] Workflow completion notification: {status}"
+            else:
+                subject = f"Workflow completion notification: {status}"
+
+            table = [
+                ("Task", "Status", "Submitted", "Started", "Completed")
+            ]
+            for name in attempts:
+                task = self.tasks[name]
+                times = [task.submit_time_str, task.start_time_str,
+                         task.end_time_str]
+                table.append((
+                    name,
+                    task.state,
+                    *['' if t is None else t for t in times]
+                ))
+
+            content = format_table(table, has_header=True)
+            content += "\n\n"
+
+            table = [
+                ("Launch time", start_time.strftime("%d %b %Y %H:%M:%S")),
+                ("Ending time", datetime.now().strftime("%d %b %Y %H:%M:%S")),
+                ("Working directory", self.dir),
+                ("Job database", self.database),
+                ("User", os.getlogin()),
+                ("Host", os.uname().nodename),
+                ("Mundone version", __version__)
+            ]
+
+            content += format_table(table)
+
+            msg = EmailMessage()
+            msg.set_content(content)
+
+            msg["Subject"] = subject
+            msg["From"] = self.email["user"]
+
+            to_addrs = self.email.get("to")
+            if to_addrs and isinstance(to_addrs, (list, tuple)):
+                to_addrs = set(to_addrs)
+                msg["To"] = ','.join(to_addrs)
+            else:
+                msg["To"] = [self.email["user"]]
+
+            host = self.email["host"]
+            port = self.email.get("port", 475)
+            with SMTP(host, port=port) as s:
+                s.send_message(msg)
+
+        return success
+
+    def _persit(self, task: Task, new: bool=False):
+        with sqlite3.connect(self.database) as con:
+            con.execute(
+                """
+                UPDATE task
+                SET status = ?, result = ?, stdout = ?, stderr = ?,
+                    submit_time = ?, start_time = ?, end_time = ?,
+                    active = ?
+                WHERE name = ? AND wid = ? AND active = 1
+                """,
+                (
+                    task.status, json.dumps(task.result), task.stdout,
+                    task.stderr, task.submit_time_str, task.start_time_str,
+                    task.end_time_str, 0 if new else 1, task.name, self.id
+                )
+            )
+
+            if new:
+                con.execute(
+                    """
+                    INSERT INTO task (name, wid, result, create_time)
+                    VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
+                    """, (task.name, self.id, json.dumps(None))
+                )
+
+            con.commit()
+
+    def _get_graph(self, parent2children: bool=True) -> Dict[str, Set[str]]:
+        graph = {n: set() for n in self.tasks}
+
+        for name, task in self.tasks.items():
+            for depname in task.requires:
+                if parent2children:
+                    graph[depname].add(name)
+                else:
+                    graph[name].add(depname)
+
+        return graph
+
+    @staticmethod
+    def _merge_nodes(graph: Dict[str, Set[str]], key: str) -> Set[str]:
+        nodes = set(graph[key])
+        for node in graph[key]:
+            nodes |= Workflow._merge_nodes(graph, node)
+
+        return nodes
+
+    def _init_runs(self, tasks: Set[str], dependencies: bool, resume: bool,
+                   dry: bool) -> List[str]:
+        # Direct child -> parents
+        child2parents = self._get_graph(parent2children=False)
+
+        # Child -> all ancestors (direct parents, grandparents, etc.)
+        child2parents = {
+            name: self._merge_nodes(child2parents, name)
+            for name in child2parents
+        }
+
+        # Direct parent -> children
+        parent2children = self._get_graph(parent2children=True)
+
+        # Parent -> all descendants (direct children, grandchildrent, etc.)
+        parent2children = {
+            name: self._merge_nodes(parent2children, name)
+            for name in parent2children
+        }
+
+        # All tasks to run if `dependencies=True` and `resume=False`
+        task_run = set()
+        for name in tasks:
+            task_run.add(name)
+            task_run |= child2parents[name]
+
+        running = set()
+
+        # Remove tasks that we do not need
+        for name in list(task_run):
+            task = self.tasks[name]
+            if task.running(update=False):
+                # Already running: do not run this task and its ancestors
+                running.add(name)
+                running |= child2parents[name]
+                continue
+
+            task = self.tasks[name]
+            if not task.requires and task.successful(update=False) and resume:
+                # No dependencies: skip `task`
+                # `task` never completed: we can skip `dep`
+                try:
+                    task_run.remove(name)
+                except KeyError:
+                    pass
+                continue
+
+            inputs = task.inputs
+            for depname in task.requires:
+                if dependencies:
+                    # We want dependencies to run
+                    dep = self.tasks[depname]
+                    if dep.successful(update=False) and resume:
+                        # `dep` completed and we want to skip completee tasks
+                        if not task.successful(update=False):
+                            # `task` never completed: we can skip `dep`
+                            try:
+                                task_run.remove(depname)
+                            except KeyError:
+                                pass
+                        elif dep.end_time <= task.end_time:
+                            # Run in order: skip `dep`
+                            try:
+                                task_run.remove(depname)
+                            except KeyError:
+                                pass
+                        else:
+                            """
+                            `dep`'s run is MORE RECENT than `task`'s:
+                            all descendants of `dep` MUST run, unless not
+                              scheduled to run in the first place
+
+                            e.g. A -> B -> C -> E
+                                           | -> F (F requires C, and D)
+                                           D
+
+                            Let's assume:
+                              - we want to run F, but skip completed dependencies.
+                                Dependencies are: A, B, C, D
+                              - all tasks completed in the past,
+                                  but A was re-run more recently
+
+                            Then we can skip A (and D), but B and C must run!
+                            E is descendant of A, but should not run
+                              as it was not scheduled to run.
+
+                            Edge case: if C is running, then we skip B and C
+                            """
+                            # Skip dependency
+                            try:
+                                task_run.remove(depname)
+                            except KeyError:
+                                pass
+
+                            # A -> {B, C, E, F}
+                            descendants = parent2children[depname]
+
+                            # {A, B, C, D} & {B, C, E, F} = {B, C}
+                            force = task_run & descendants
+                            # add in `tasks` so never removed
+                            tasks |= force
+                            task_run |= force
+
+        task_run -= running
+        if task_run and not dry:
+            with sqlite3.connect(self.database) as con:
+                cur = con.cursor()
+                cur.executemany(
+                    """
+                    UPDATE task
+                    SET active = 0
+                    WHERE name = ? AND wid = ?
+                    """,
+                    ((name, self.id) for name in task_run)
+                )
+
+                cur.executemany(
+                    """
+                    INSERT INTO task (name, wid, result, create_time)
+                    VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
+                    """,
+                    ((name, self.id, json.dumps(None)) for name in task_run)
+                )
+
+                con.commit()
+                cur.close()
+
+        tasks = set()
+        graph = {}
+        for name in self.tasks:
+            tasks.add(name)
+            graph[name] = set()
+
+        lst = []
+        while task_run:
+            tmp = set()
+            for name in sorted(task_run):
+                for depname in self.tasks[name].requires:
+                    if depname in task_run:
+                        tmp.add(name)
+                        break
+                else:
+                    lst.append(name)
+
+            task_run = tmp
+
+        return lst
+
+    def run(self, names: Optional[Collection[str]]=None, **kwargs) -> bool:
         to_run = self.register_runs(names, dependencies, resume, dry, not secs)
         if not to_run:
             return True
         elif dry:
-            sys.stderr.write("tasks to run:\n")
-            for task_name in to_run:
-                sys.stderr.write("    * {}\n".format(task_name))
+            sys.stderr.write("task(s) to run:\n")
+            for name in to_run:
+                sys.stderr.write(f"  * {name}\n")
             return True
         elif not secs:
             # We just register runs
-            sys.stderr.write("tasks added:\n")
-            for task_name in to_run:
-                sys.stderr.write("    * {}\n".format(task_name))
+            sys.stderr.write("task(s) added:\n")
+            for name in to_run:
+                sys.stderr.write(f"  * {name}\n")
             return True
 
         start_time = datetime.now()
@@ -298,397 +732,33 @@ class Workflow(object):
             else:
                 break
 
-        if failures:
-            logger.error("workflow could not complete "
-                         "because one or more tasks failed: "
-                         "{}".format(", ".join(failures)))
-            success = False
-        else:
-            logger.info("workflow completed successfully")
-            success = True
-
-        if self.email:
-            if self.name:
-                subject = "[{}] Workflow completion notification: {}".format(
-                    self.name,
-                    "success" if success else "error"
-                )
-            else:
-                subject = "Workflow completion notification: {}".format(
-                    "success" if success else "error"
-                )
-
-            table = [
-                ("Task", "Status", "Submitted", "Started", "Completed")
-            ]
-            for task_name in to_run:
-                task = self.tasks[task_name]
-                times = [task.submit_time, task.start_time, task.end_time]
-                table.append((
-                    task_name,
-                    task.state,
-                    *['' if t is None else t for t in times]
-                ))
-
-            content = format_table(table, has_header=True)
-            content += "\n\n"
-
-            table = [
-                ("Launch time", start_time.strftime("%d %b %Y %H:%M:%S")),
-                ("Ending time", datetime.now().strftime("%d %b %Y %H:%M:%S")),
-                ("Working directory", self.workdir),
-                ("Job database", self.database),
-                ("User", os.getlogin()),
-                ("Host", os.uname().nodename),
-                ("Mundone version", __version__)
-            ]
-
-            content += format_table(table)
-
-            msg = EmailMessage()
-            msg.set_content(content)
-
-            msg["Subject"] = subject
-            msg["From"] = self.email["user"]
-
-            to_addrs = self.email.get("to")
-            if to_addrs and isinstance(to_addrs, (list, tuple)):
-                to_addrs = set(to_addrs)
-                msg["To"] = ','.join(to_addrs)
-            else:
-                msg["To"] = [self.email["user"]]
-
-            host = self.email["host"]
-            port = self.email.get("port", 475)
-            with SMTP(host, port=port) as s:
-                s.send_message(msg)
-
-        return success
-
-    def update_runs(self, runs_started, runs_terminated):
-        with sqlite3.connect(self.database) as con:
-            cur = con.cursor()
-            for task_name in runs_started:
-                # for pid, task_name, input_file, output_file in runs_started:
-                task = self.tasks[task_name]
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET
-                      pid = ?,
-                      status = ?,
-                      input_file = ?,
-                      output_file = ?,
-                      submit_time = ?,
-                      locked = 0
-                    WHERE name = ? AND active = 1 AND workflow_id = ?
-                    """,
-                    (task.pid, STATUSES["running"],
-                     task.input_f, task.output_f,
-                     task.submit_time, task_name, self.id)
-                )
-
-            new_runs = []
-            for task_name, resubmit in runs_terminated:
-                task = self.tasks[task_name]
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET
-                      status = ?,
-                      output = ?,
-                      stdout = ?,
-                      stderr = ?,
-                      start_time = ?,
-                      end_time = ?,
-                      locked = 0
-                    WHERE name = ? AND active = 1 AND workflow_id = ?
-                    """,
-                    (task.status, json.dumps(task.output.read()),
-                     task.stdout, task.stderr, task.start_time,
-                     task.end_time, task_name, self.id)
-                )
-
-                if task.status == STATUSES["error"] and resubmit:
-                    new_runs.append(task_name)
-
-            if new_runs:
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET active = 0
-                    WHERE name in ({}) AND workflow_id = ?
-                    """.format(','.join(['?' for _ in new_runs])),
-                    tuple(new_runs) + (self.id,)
-                )
-
-                cur.executemany(
-                    """
-                    INSERT INTO task (name, workflow_id, create_time)
-                    VALUES (?, ?, strftime("%Y-%m-%d %H:%M:%S"))
-                    """,
-                    ((task_name, self.id) for task_name in new_runs)
-                )
-
-            cur.close()
-
-    def acquire_run(self, task_name, lock=False):
-        with sqlite3.connect(self.database) as con:
-            cur = con.cursor()
-            cur.execute(
-                """
-                SELECT
-                  pid, shared, status, output, stdout, stderr,
-                  input_file, output_file, start_time, end_time
-                FROM task
-                WHERE active = 1 AND workflow_id = ? AND name = ?
-                """,
-                (self.id, task_name)
-            )
-
-            run = dict(zip(
-                ("pid", "shared", "status", "output", "stdout",
-                 "stderr", "input_file", "output_file",
-                 "start_time", "end_time"),
-                cur.fetchone()
-            ))
-
-            if lock:
-                cur.execute(
-                    """
-                    UPDATE task
-                    SET locked = 1
-                    WHERE active = 1 AND workflow_id = ? AND name = ?
-                    """,
-                    (self.id, task_name)
-                )
-            cur.close()
-        return run
-
-    def release_run(self, task_name):
-        with sqlite3.connect(self.database) as con:
-            cur = con.cursor()
-            cur.execute(
-                """
-                UPDATE task
-                SET locked = 0
-                WHERE active = 1 AND workflow_id = ? AND name = ?
-                """,
-                (self.id, task_name)
-            )
-            cur.close()
-
-    def register_runs(self, names: Optional[Collection[str]],
-                      dependencies: bool=True, resume: bool=False,
-                      dry: bool=False, share_runs: bool=False
-                      ) -> Collection[str]:
-        con = sqlite3.connect(self.database)
-        cur = con.cursor()
-        cur.execute(
-            """
-            SELECT name, status, locked, input_file, output_file
-            FROM task
-            WHERE active = 1 AND workflow_id = ?
-            """, (self.id,)
-        )
-
-        tasks_success = set()
-        tasks_running = set()
-        tasks_pending = set()
-        tasks_update = []
-        for task_name, status, locked, input_file, output_file in cur:
-            if task_name not in self.tasks:
-                # Task in DB that is not in the workflow any more
-                continue
-            elif status == STATUSES["success"]:
-                """
-                Task completed successfully:
-                    tasks depending on this one can run
-                """
-                tasks_success.add(task_name)
-            elif status == STATUSES["running"]:
-                # Flagged as running in the database
-                if output_file is None:
-                    # ... but actually pending (would not be None if running)
-                    tasks_pending.add(task_name)
-                elif os.path.isfile(output_file) and not locked:
-                    # ... but the output file exists!
-                    keys = ("status", "output", "stdout", "stderr",
-                            "start_time", "end_time")
-                    values = Task.collect_alt(output_file)
-                    res = dict(zip(keys, values))
-
-                    if res["status"] == STATUSES["success"]:
-                        tasks_success.add(task_name)
-
-                    self.tasks[task_name].update(res)
-                    tasks_update.append(task_name)
-                else:
-                    # Assume the task is still running
-                    tasks_running.add(task_name)
-            elif status == STATUSES["pending"]:
-                tasks_pending.add(task_name)
-
-            # TODO: remove in/stdour/stderr files if they exist
-
-        # Updated completed tasks that were still flagged as running
-        for task_name in tasks_update:
-            task = self.tasks[task_name]
-            cur.execute(
-                """
-                UPDATE task
-                SET
-                  status = ?,
-                  output = ?,
-                  stdout = ?,
-                  stderr = ?,
-                  start_time = ?,
-                  end_time = ?
-                WHERE name = ? AND active = 1 AND workflow_id = ?
-                """,
-                (task.status, json.dumps(task.output.read()),
-                 task.stdout, task.stderr, task.start_time,
-                 task.end_time, task_name, self.id)
-            )
-
-        if names is None:
-            # All tasks not already completed/running/pending
-            to_run = set()
-            for task_name in self.tasks:
-                if task_name in tasks_success and resume:
-                    continue
-                elif task_name in tasks_running or task_name in tasks_pending:
-                    continue
-                else:
-                    to_run.add(task_name)
-        else:
-            # Run passed tasks
-            to_run = set(names)
-
-        # Add dependencies
-        to_lookup = to_run
-        while True:
-            run_dependencies = set()
-
-            for task_name in to_lookup:
-                task = self.tasks[task_name]
-                inputs = task.inputs
-                for dep_name in task.requires:
-                    if dep_name not in self.tasks:
-                        raise ValueError("'{}' requires an invalid task: "
-                                         "'{}'".format(task, dep_name))
-                    elif task_name == dep_name:
-                        raise ValueError(
-                            "'{}' cannot require itself".format(task)
-                        )
-
-                    if dep_name in tasks_success and resume:
-                        # skip completed dependency
-                        continue
-                    elif not dependencies and dep_name not in inputs:
-                        """
-                        Skip because:
-                            - dependencies skipping is enabled
-                            - task does not take another task's output as input
-                        """
-                        continue
-                    else:
-                        run_dependencies.add(dep_name)
-
-            if run_dependencies:
-                # Found new dependencies to look up
-                to_run |= run_dependencies
-                to_lookup = run_dependencies
-            else:
-                # No more dependencies
-                break
-
-        if dry:
-            # We don't want to display already running tasks
-            to_run -= tasks_running
-        else:
-            to_insert = to_run - (tasks_pending | tasks_running)
-            if to_insert:
-                # Insert tasks not already pending/running
-                for task_name in to_insert:
-                    cur.execute(
-                        """
-                        UPDATE task
-                        SET active = 0, locked = 0
-                        WHERE name = ? AND workflow_id = ?
-                        """, (task_name, self.id)
-                    )
-
-                    cur.execute(
-                        """
-                        INSERT INTO task (
-                          name, workflow_id, shared, create_time
-                        ) VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
-                        """, (task_name, self.id, 1 if share_runs else 0)
-                    )
-
-        con.commit()
-        cur.close()
-        con.close()
-
-        return self.sort_task(to_run)
-
-    def sort_task(self, tasks: Set[str]) -> Collection[str]:
-        """
-        Parse a tree of tasks where the roots are tasks without dependencies
-        and the leaves are the tasks with dependencies:
-
-                    A       B
-                  C  D     E
-                 F    G
-                  \  /      B -> E
-                   H        A -> C -> F
-                              -> D -> G
-                            (F + G) -> H
-
-        We iterate over all tasks in the tree:
-          - if a task does not have any dependency in the tree, it's taken out
-          - if a task has a dependency that is still in the tree, it's kept
-
-        e.g. A and B are removed at the 1st iteration,
-             leaving C, D, and E without an in-tree dependency:
-                -> they will be taken out at the next iteration
-
-        We continue until the tree is empty
-        """
-        ordered = []
-        while tasks:
-            with_deps = set()
-            without_deps = set()
-            for task_name in tasks:
-                for dep_name in self.tasks[task_name].requires:
-                    if dep_name in tasks:
-                        with_deps.add(task_name)
-                        break
-                else:
-                    without_deps.add(task_name)
-
-            tasks = with_deps
-            ordered += sorted(list(without_deps))
-
-        return ordered
-
-    def kill(self):
+    def terminate(self):
+        return
         to_kill = []
         for task_name, task in self.tasks.items():
             if task.running():
                 to_kill.append((task_name, task))
 
         if to_kill:
-            logging.info("killing running tasks")
+            logging.info("terminating running tasks")
             runs_terminated = []
             for task_name, task in to_kill:
                 logging.info("\t- {}".format(task_name))
-                task.cancel()
+                task.terminate()
                 runs_terminated.append((task_name, False))
 
             self.update_runs([], runs_terminated)
         self.active = False
+
+    def close(self):
+        if not self.daemon:
+            self.terminate()
+
+        if self.temporary:
+            try:
+                os.remove(self.database)
+            except FileNotFoundError:
+                pass
 
 
 def format_table(table, has_header=False, margin=4):
