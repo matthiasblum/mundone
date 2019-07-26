@@ -139,8 +139,7 @@ class Workflow(object):
             )
             con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
-    def _load_tasks(self, exclude: Collection[str]=list(),
-                    update: bool=False) -> List[Task]:
+    def _load_tasks(self, exclude: Collection[str]=list(), update: bool=False):
         with sqlite3.connect(self.database) as con:
             cur = con.execute(
                 """
@@ -273,7 +272,9 @@ class Workflow(object):
         pending -= set(running)
         completed = set()
         failed = set()
-        while True:
+        while pending or running:
+            time.sleep(seconds)
+
             for name, task in running.items():
                 if not task.done():
                     continue
@@ -322,9 +323,6 @@ class Workflow(object):
 
             pending -= set(running) | failed
             self._load_tasks(exclude=running, update=False)
-            if not running and not pending:
-                break
-            time.sleep(seconds)
 
         self._running = False
         if failed:
