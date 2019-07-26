@@ -4,10 +4,12 @@ import inspect
 import os
 import pickle
 import struct
-import tempfile
 import sys
+import tempfile
 import time
 from datetime import datetime
+from random import choices
+from string import ascii_lowercase, digits
 from subprocess import Popen, PIPE, DEVNULL
 from typing import Callable, Collection, Optional, Set
 
@@ -33,6 +35,10 @@ def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
     return path
 
 
+def gen_random_string(k: int):
+    return ''.join(choices(ascii_lowercase + digits, k=k))
+
+
 class Task(object):
     def __init__(self, fn: Callable, args: Collection=[], kwargs: dict=dict(),
                  **_kwargs):
@@ -48,7 +54,7 @@ class Task(object):
         self.args = args
         self.kwargs = kwargs
 
-        self.name = _kwargs.get("name", fn.__name__)
+        self.name = _kwargs.get("name", fn.__name__ + gen_random_string(k=6))
         self.status = STATUSES["pending"]
         self.proc = None
         self.job_id = None
