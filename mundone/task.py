@@ -6,8 +6,10 @@ import pickle
 import sys
 import time
 from datetime import datetime
+from random import choices
+from string import ascii_lowercase, digits
 from subprocess import Popen, PIPE, DEVNULL
-from tempfile import mkdtemp, mkstemp
+from tempfile import mkstemp
 from typing import Callable, Optional, Set, Union
 
 from . import runner
@@ -24,16 +26,8 @@ SUFFIX_STDOUT = ".out"
 SUFFIX_STDERR = ".err"
 
 
-def mktemp(prefix: Optional[str]=None, suffix: Optional[str]=None,
-           dir: Optional[str]=None, isdir: bool=False) -> str:
-
-    if isdir:
-        path = tempfile.mkdtemp(suffix, prefix, dir)
-    else:
-        fd, path = tempfile.mkstemp(suffix, prefix, dir)
-        os.close(fd)
-
-    return path
+def gen_random_string(k: int):
+    return ''.join(choices(ascii_lowercase + digits, k=k))
 
 
 class Task(object):
@@ -120,8 +114,8 @@ class Task(object):
     def id(self) -> Optional[int]:
         if self.proc is not None:
             return self.proc.pid
-        elif self.job_id is not None:
-            return -self.job_id
+        elif self.jobid is not None:
+            return -self.jobid
         else:
             return None
 
