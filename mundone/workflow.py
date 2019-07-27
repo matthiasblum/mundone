@@ -518,7 +518,7 @@ class Workflow(object):
                               - we want to run F, but skip completed dependencies.
                                 Dependencies are: A, B, C, D
                               - all tasks completed in the past,
-                                  but A was re-run more recently
+                                  but A was recently re-run
 
                             Then we can skip A (and D), but B and C must run!
                             E is descendant of A, but should not run
