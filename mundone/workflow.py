@@ -101,10 +101,10 @@ class Workflow(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+        self.clean()
 
     def __del__(self):
-        self.close()
+        self.clean()
 
     @staticmethod
     def is_sqlite3(database: str) -> bool:
@@ -748,7 +748,7 @@ class Workflow(object):
             self.update_runs([], runs_terminated)
         self.active = False
 
-    def close(self):
+    def clean(self):
         if not self.daemon:
             self.terminate()
 
