@@ -105,6 +105,7 @@ class Workflow(object):
         if self.daemon:
             return
 
+        self.kill()
         if self.rm_dir:
             try:
                 shutil.rmtree(self.workdir)
