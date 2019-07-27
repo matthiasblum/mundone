@@ -644,7 +644,7 @@ class Workflow(object):
                     if task.done():
                         # Completed
                         if task.successful():
-                            logger.info("'{}' has been completed".format(task))
+                            logger.info(" {:<35}completed".format(task))
                             run["status"] = task.status
                             _resubmit = False
                             try:
@@ -653,12 +653,12 @@ class Workflow(object):
                                 pass
                         elif tries[task_name] <= resubmit:
                             # Failed but will resubmit task
-                            logger.error("'{}' has failed".format(task))
+                            logger.error("{:<35}failed".format(task))
                             run["status"] = STATUSES["pending"]
                             _resubmit = True
                         else:
                             # TODO: because of dependency or not?
-                            logger.error("'{}' has failed".format(task))
+                            logger.error("{:<35}failed".format(task))
                             run["status"] = task.status
                             _resubmit = False
                             failures.add(task.name)
@@ -700,7 +700,7 @@ class Workflow(object):
                         failures.add(task_name)
                     else:
                         # Ready!
-                        logger.info("'{}' is running".format(task))
+                        logger.info(" {:<35}running".format(task))
                         task.run(workdir=self.workdir, trust_scheduler=trust)
                         tasks_started.append(task_name)
                         tries[task_name] += 1
