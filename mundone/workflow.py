@@ -5,12 +5,11 @@ import logging
 import os
 import sqlite3
 import time
-import shutil
 import sys
 from datetime import datetime
 from email.message import EmailMessage
 from smtplib import SMTP
-from tempfile import mkdtemp, mkstemp
+from tempfile import mkstemp
 from typing import Collection, Optional, Set
 
 from mundone import __version__
@@ -36,13 +35,8 @@ class Workflow(object):
         if not isinstance(self.id, str):
             raise ValueError("'id' expects a str")
 
-        self.workdir = kwargs.get("dir")
-        if self.workdir:
-            os.makedirs(self.workdir, exist_ok=True)
-            self.rm_dir = False
-        else:
-            self.workdir = mkdtemp()
-            self.rm_dir = True
+        self.workdir = kwargs.get("dir", os.getcwd())
+        os.makedirs(self.workdir, exist_ok=True)
 
         self.database = kwargs.get("db")
         if self.database and isinstance(self.database, str):
@@ -106,12 +100,6 @@ class Workflow(object):
             return
 
         self.kill()
-        if self.rm_dir:
-            try:
-                shutil.rmtree(self.workdir)
-            except FileNotFoundError:
-                pass
-
         if self.rm_db:
             try:
                 os.remove(self.database)
