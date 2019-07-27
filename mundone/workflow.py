@@ -41,16 +41,14 @@ class Workflow(object):
         self.dir = kwargs.get("dir", os.getcwd())
         os.makedirs(self.dir, exist_ok=True)
 
-        database = kwargs.get("db")
-        if database:
-            self.database = database
-            self.temporary = False
+        if self.name:
+            database = os.path.join(self.dir, self.name + ".db")
         else:
-            fd, self.database = mkstemp()
+            fd, database = mkstemp(dir=self.dir, suffix=".db")
             os.close(fd)
-            os.remove(self.database)
-            self.temporary = True
+            os.remove(database)
 
+        database = kwargs.get("db", database)
         if not os.path.isfile(self.database):
             try:
                 open(self.database, "w").close()
@@ -751,12 +749,6 @@ class Workflow(object):
     def clean(self):
         if not self.daemon:
             self.terminate()
-
-        if self.temporary:
-            try:
-                os.remove(self.database)
-            except FileNotFoundError:
-                pass
 
 
 def format_table(table, has_header=False, margin=4):
