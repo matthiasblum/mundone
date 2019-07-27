@@ -266,12 +266,10 @@ class Workflow(object):
                 elif run["status"] == STATUSES["pending"]:
                     flag = 0
 
-                    if dependencies:
-                        deps = task.requires
-                    else:
-                        deps = task.inputs - task.requires
+                    for dep_name in task.requires:
+                        if not dependencies and dep_name not in to_run:
+                            continue
 
-                    for dep_name in deps:
                         dep_run = self.acquire_run(dep_name, lock=False)
 
                         if dep_run["status"] == STATUSES["error"]:
