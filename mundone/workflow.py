@@ -489,7 +489,7 @@ class Workflow(object):
                     # We want dependencies to run
                     dep = self.tasks[depname]
                     if dep.successful(update=False) and resume:
-                        # `dep` completed and we want to skip completee tasks
+                        # `dep` completed and we want to skip completed tasks
                         if not task.successful(update=False):
                             # `task` never completed: we can skip `dep`
                             try:
