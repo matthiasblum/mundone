@@ -38,26 +38,26 @@ class Workflow(object):
         self.workdir = kwargs.get("dir", os.getcwd())
         os.makedirs(self.workdir, exist_ok=True)
 
-        self.database = kwargs.get("db")
-        if self.database and isinstance(self.database, str):
-            self.rm_db = False
-            if not os.path.isfile(self.database):
-                try:
-                    open(self.database, "w").close()
-                except (FileNotFoundError, PermissionError):
-                    # Cannot create file
-                    raise RuntimeError("Cannot create database "
-                                       "'{}'".format(self.database))
-                else:
-                    os.remove(self.database)
-            elif not self.is_sqlite3(self.database):
-                raise RuntimeError("'{}' is not "
-                                   "an SQLite database".format(self.database))
+        if self.name:
+            database = os.path.join(self.workdir, self.name + ".db")
         else:
-            fd, self.database = mkstemp(dir=self.workdir)
+            fd, database = mkstemp(dir=self.workdir, suffix=".db")
             os.close(fd)
-            os.remove(self.database)
-            self.rm_db = True
+            os.remove(database)
+
+        self.database = kwargs.get("db", database)
+        if not os.path.isfile(self.database):
+            try:
+                open(self.database, "w").close()
+            except (FileNotFoundError, PermissionError):
+                # Cannot create file
+                raise RuntimeError("Cannot create database "
+                                   "'{}'".format(self.database))
+            else:
+                os.remove(self.database)
+        elif not self.is_sqlite3(self.database):
+            raise RuntimeError("'{}' is not "
+                               "an SQLite database".format(self.database))
 
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("Workflow() arg 1 must be a list or a tuple")
@@ -96,15 +96,8 @@ class Workflow(object):
         self.clean()
 
     def clean(self):
-        if self.daemon:
-            return
-
-        self.kill()
-        if self.rm_db:
-            try:
-                os.remove(self.database)
-            except FileNotFoundError:
-                pass
+        if not self.daemon:
+            self.kill()
 
     @staticmethod
     def is_sqlite3(database: str) -> bool:
