@@ -5,10 +5,12 @@ import logging
 import os
 import sqlite3
 import time
+import shutil
 import sys
 from datetime import datetime
 from email.message import EmailMessage
 from smtplib import SMTP
+from tempfile import mkdtemp, mkstemp
 from typing import Collection, Optional, Set
 
 from mundone import __version__
@@ -26,8 +28,6 @@ _ch.setFormatter(
 logger.addHandler(_ch)
 logger.propagate = False
 
-DBNAME = "mundone.sqlite"
-
 
 class Workflow(object):
     def __init__(self, tasks: Collection[Task], **kwargs):
@@ -36,11 +36,17 @@ class Workflow(object):
         if not isinstance(self.id, str):
             raise ValueError("'id' expects a str")
 
-        self.workdir = kwargs.get("dir", os.getcwd())
-        os.makedirs(self.workdir, exist_ok=True)
+        self.workdir = kwargs.get("dir")
+        if self.workdir:
+            os.makedirs(self.workdir, exist_ok=True)
+            self.rm_dir = False
+        else:
+            self.workdir = mkdtemp()
+            self.rm_dir = True
 
-        self.database = kwargs.get("db", os.path.join(self.workdir, DBNAME))
-        if isinstance(self.database, str):
+        self.database = kwargs.get("db")
+        if self.database and isinstance(self.database, str):
+            self.rm_db = False
             if not os.path.isfile(self.database):
                 try:
                     open(self.database, "w").close()
@@ -53,6 +59,11 @@ class Workflow(object):
             elif not self.is_sqlite3(self.database):
                 raise RuntimeError("'{}' is not "
                                    "an SQLite database".format(self.database))
+        else:
+            fd, self.database = mkstemp(dir=self.workdir)
+            os.close(fd)
+            os.remove(self.database)
+            self.rm_db = True
 
         if not isinstance(tasks, (list, tuple)):
             raise TypeError("Workflow() arg 1 must be a list or a tuple")
@@ -74,6 +85,9 @@ class Workflow(object):
 
         self.daemon = kwargs.get("daemon", False)
 
+        if not kwargs.get("verbose", True):
+            logger.setLevel(9001)
+
         self.tasks = {t.name: t for t in tasks}
         self.init_database()
         self.active = True
@@ -82,12 +96,26 @@ class Workflow(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if not self.daemon:
-            self.kill()
+        self.clean()
 
     def __del__(self):
-        if not self.daemon:
-            self.kill()
+        self.clean()
+
+    def clean(self):
+        if self.daemon:
+            return
+
+        if self.rm_dir:
+            try:
+                shutil.rmtree(self.workdir)
+            except FileNotFoundError:
+                pass
+
+        if self.rm_db:
+            try:
+                os.remove(self.database)
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def is_sqlite3(database: str) -> bool:
