@@ -10,7 +10,7 @@ from random import choices
 from string import ascii_lowercase, digits
 from subprocess import Popen, PIPE, DEVNULL
 from tempfile import mkstemp
-from typing import Callable, Optional, Set, Union
+from typing import Callable, Optional, Sequence, Union
 
 from . import runner
 
@@ -34,7 +34,7 @@ class Task(object):
     def __init__(self, fn: Callable, args: Union[list, tuple]=list(),
                  kwargs: dict=dict(), **_kwargs):
         if not callable(fn):
-            raise TypeError("'{}' is not callable".format(fn))
+            raise TypeError(f"'{fn}' is not callable")
         elif not isinstance(args, (list, tuple)):
             raise TypeError("Task() arg 2 must be a list or a tuple")
         elif not isinstance(kwargs, dict):
@@ -50,7 +50,7 @@ class Task(object):
 
         # Local process
         self.proc = None
-        self.file_handlers = None # tuple of file handlers (stdout, stderr)
+        self.file_handlers = None  # file handlers (stdout, stderr)
 
         # LSF job
         self.jobid = None
@@ -59,10 +59,10 @@ class Task(object):
         self.stderr = None
         self.result = None
 
-        self._create_time = None
-        self._submit_time = None
-        self._start_time = None
-        self._end_time = None
+        self.create_time = datetime.now()
+        self.submit_time = None
+        self.start_time = None
+        self.end_time = None
 
         self.returncode = None
         self.trust_scheduler = True
@@ -75,36 +75,31 @@ class Task(object):
         else:
             self.scheduler = None
 
+        self.requires = set()
+        for arg in self.args:
+            if isinstance(arg, TaskOutput):
+                self.requires.add(arg.task_name)
+
+        for arg in self.kwargs.values():
+            if isinstance(arg, TaskOutput):
+                self.requires.add(arg.task_name)
+
         requires = _kwargs.get("requires", [])
         if not isinstance(requires, (dict, list, set, tuple)):
             raise TypeError("'requires' must of one of these types: "
                             "dict, list, set, tuple")
 
-        self.requires = self.inputs
-        for dep in set(requires):
-            if isinstance(dep, Task):
-                self.requires.add(dep.name)
-            elif isinstance(dep, str):
-                self.requires.add(dep)
+        for item in set(requires):
+            if isinstance(item, Task):
+                self.requires.add(item.name)
+            elif isinstance(item, str):
+                self.requires.add(item)
             else:
                 raise TypeError("'requires' must be a sequence "
                                 "of strings or Tasks")
 
     def __repr__(self) -> str:
         return self.name
-
-    @property
-    def inputs(self) -> Set[str]:
-        names = set()
-        for arg in self.args:
-            if isinstance(arg, TaskOutput):
-                names.add(arg.task)
-
-        for key, arg in self.kwargs.items():
-            if isinstance(arg, TaskOutput):
-                names.add(arg.task)
-
-        return names
 
     @property
     def output(self):
@@ -120,60 +115,6 @@ class Task(object):
             return None
 
     @property
-    def submit_time(self) -> Optional[str]:
-        return self._submit_time
-
-    @submit_time.setter
-    def submit_time(self, value):
-        if isinstance(value, str):
-            self._submit_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        else:
-            self._submit_time = value
-
-    @property
-    def submit_time_str(self) -> Optional[str]:
-        try:
-            return self.submit_time.strftime("%Y-%m-%d %H:%M:%S")
-        except AttributeError:
-            return None
-
-    @property
-    def start_time(self) -> Optional[str]:
-        return self._start_time
-
-    @start_time.setter
-    def start_time(self, value):
-        if isinstance(value, str):
-            self._start_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        else:
-            self._start_time = value
-
-    @property
-    def start_time_str(self) -> Optional[str]:
-        try:
-            return self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        except AttributeError:
-            return None
-
-    @property
-    def end_time(self) -> Optional[str]:
-        return self._end_time
-
-    @end_time.setter
-    def end_time(self, value):
-        if isinstance(value, str):
-            self._end_time = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        else:
-            self._end_time = value
-
-    @property
-    def end_time_str(self) -> Optional[str]:
-        try:
-            return self.end_time.strftime("%Y-%m-%d %H:%M:%S")
-        except AttributeError:
-            return None
-
-    @property
     def state(self) -> str:
         if self.status == STATUS_PENDING:
             return "pending"
@@ -186,10 +127,10 @@ class Task(object):
         elif self.status == STATUS_SUCCESS:
             return "done"
 
-    def _pack(self, workdir: str):
-        os.makedirs(workdir, exist_ok=True)
+    def _pack(self, dir: str):
+        os.makedirs(dir, exist_ok=True)
 
-        fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
+        fd, self.basepath = mkstemp(prefix=self.name, dir=dir)
         os.close(fd)
         os.remove(self.basepath)
 
@@ -237,11 +178,11 @@ class Task(object):
         self.kwargs = kwargs
         return True
 
-    def start(self, workdir: str=os.getcwd(), trust_scheduler: bool=True):
-        if self.running(update=False) or not self.ready():
+    def start(self, dir: str=os.getcwd(), trust_scheduler: bool=True):
+        if self.running() or not self.ready():
             return
 
-        self._pack(workdir)
+        self._pack(dir)
         stdout_file = self.basepath + SUFFIX_STDOUT
         stderr_file = self.basepath + SUFFIX_STDERR
         input_file = self.basepath + SUFFIX_INPUT
@@ -266,22 +207,22 @@ class Task(object):
             if isinstance(mem, int):
                 cmd += [
                     "-M", str(mem),
-                    "-R", "select[mem>{}]".format(mem),
-                    "-R", "rusage[mem={}]".format(mem)
+                    "-R", f"select[mem>{mem}]",
+                    "-R", f"rusage[mem={mem}]"
                 ]
 
             tmp = self.scheduler.get("tmp")
             if isinstance(tmp, int):
                 cmd += [
-                    "-R", "select[tmp>{}]".format(tmp),
-                    "-R", "rusage[tmp={}]".format(tmp)
+                    "-R", f"select[tmp>{tmp}]",
+                    "-R", f"rusage[tmp={tmp}]"
                 ]
 
             tmp = self.scheduler.get("scratch")
             if isinstance(tmp, int):
                 cmd += [
-                    "-R", "select[scratch>{}]".format(tmp),
-                    "-R", "rusage[scratch={}]".format(tmp)
+                    "-R", f"select[scratch>{tmp}]",
+                    "-R", f"rusage[scratch={tmp}]"
                 ]
 
             cmd += ["-o", stdout_file, "-e", stderr_file]
@@ -314,8 +255,9 @@ class Task(object):
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
 
-    def wait(self, seconds: int=60):
+    def wait(self, seconds: int=10):
         while not self.done():
+            self.poll()
             time.sleep(seconds)
 
     def _collect(self) -> Optional[int]:
@@ -368,7 +310,7 @@ class Task(object):
 
         return returncode
 
-    def _update_status(self):
+    def poll(self):
         if self.status != STATUS_RUNNING:
             return
 
@@ -406,21 +348,18 @@ class Task(object):
                         self.status = STATUS_ERROR
         elif self.basepath and os.path.isfile(self.basepath + SUFFIX_RESULT):
             returncode = self._collect()
-            self.status = STATUS_SUCCESS if returncode == 0 else STATUS_ERROR
+            if returncode == 0:
+                self.status = STATUS_SUCCESS
+            else:
+                self.status = STATUS_ERROR
 
-    def running(self, update: bool=True) -> bool:
-        if update:
-            self._update_status()
+    def running(self) -> bool:
         return self.status == STATUS_RUNNING
 
-    def successful(self, update: bool=True) -> bool:
-        if update:
-            self._update_status()
+    def completed(self) -> bool:
         return self.status == STATUS_SUCCESS
 
-    def done(self, update: bool=True) -> bool:
-        if update:
-            self._update_status()
+    def done(self) -> bool:
         return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
 
     def terminate(self):
@@ -437,17 +376,19 @@ class Task(object):
             as LSF can take some time to flush the job report to the disk
             """
             while True:
+                size = 0
                 try:
                     fh = open(self.basepath + SUFFIX_STDOUT, "rt")
                 except FileNotFoundError:
-                    n = 0
+                    pass
                 else:
-                    n = len(fh.read())
+                    size = len(fh.read())
                     fh.close()
-                finally:
-                    time.sleep(1)
-                    if n:
-                        break
+
+                if size:
+                    break
+
+                time.sleep(1)
 
         self._collect()
         self.status = STATUS_CANCELLED
@@ -479,11 +420,28 @@ class TaskOutput(object):
         self._task = task
 
     def ready(self) -> bool:
+        self._task.poll()
         return self._task.done()
 
     def read(self):
         return self._task.result
 
     @property
-    def task(self) -> str:
+    def task_name(self) -> str:
         return self._task.name
+
+
+def as_completed(tasks: Sequence[Task], seconds: int=10):
+    while tasks:
+        _tasks = []
+
+        for t in tasks:
+            t.poll()
+            if t.done():
+                yield t
+            else:
+                _tasks.append(t)
+
+        tasks = _tasks
+        if tasks:
+            time.sleep(seconds)

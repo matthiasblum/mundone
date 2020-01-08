@@ -3,8 +3,9 @@
 
 import os
 import random
+import time
 
-from mundone import Task, Workflow
+from mundone import Task, Workflow, as_completed
 
 
 def hello():
@@ -46,7 +47,13 @@ def retry():
         raise FileNotFoundError("Shame...")
 
 
-def test():
+def sleep():
+    secs = random.random() * 10
+    time.sleep(secs)
+    return secs
+
+
+def workflow():
     t1 = Task(hello)
     t2 = Task(add, (1, 2), requires=('hello',))
     t3 = Task(multiply, (t2.output, 5))
@@ -56,4 +63,16 @@ def test():
     t7 = Task(retry)
     t8 = Task(goodbye, requires=(t6, "retry"))
 
-    return Workflow([t1, t2, t3, t4, t5, t6, t7, t8])
+    with Workflow([t1, t2, t3, t4, t5, t6, t7, t8]) as w:
+        w.start(max_retries=0)
+
+
+def batch():
+    tasks = []
+    for i in range(1, 10):
+        t = Task(sleep)
+        t.start()
+        tasks.append(t)
+
+    for t in as_completed(tasks, seconds=0):
+        print(t.basepath, t.result)
