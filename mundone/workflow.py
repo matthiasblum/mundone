@@ -12,17 +12,15 @@ from typing import Collection, Dict, List, Optional, Set
 from .task import Task
 
 
-logger = logging.getLogger("mundone")
-logger.setLevel(logging.INFO)
-_ch = logging.StreamHandler()
-_ch.setFormatter(
-    logging.Formatter(
-        fmt="%(asctime)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+logger = logging.getLogger(__name__)
+if not logger.hasHandlers():
+    logger.setLevel(logging.INFO)
+    _ch = logging.StreamHandler()
+    _ch.setFormatter(
+        logging.Formatter(fmt="%(asctime)s: %(message)s",
+                          datefmt="%Y-%m-%d %H:%M:%S")
     )
-)
-logger.addHandler(_ch)
-logger.propagate = False
+    logger.addHandler(_ch)
 
 DBNAME = "mundone.sqlite"
 
