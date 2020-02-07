@@ -18,7 +18,7 @@ _ch = logging.StreamHandler()
 _ch.setFormatter(
     logging.Formatter(
         fmt="%(asctime)s: %(message)s",
-        datefmt="%y-%m-%d %H:%M:%S"
+        datefmt="%Y-%m-%d %H:%M:%S"
     )
 )
 logger.addHandler(_ch)
@@ -369,12 +369,11 @@ class Workflow(object):
 
         self.running = False
         if failed:
-            logger.error("workflow could not complete "
-                         "because one or more tasks failed: "
+            logger.error(f"one or more tasks did not complete: "
                          f"{', '.join(failed)}")
             success = False
         else:
-            logger.info("workflow completed successfully")
+            logger.info("all tasks completed successfully")
             success = True
 
         return success
