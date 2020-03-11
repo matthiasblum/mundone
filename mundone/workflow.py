@@ -365,6 +365,20 @@ class Workflow(object):
             pending -= set(running) | set(failed)
             self.get_tasks(exclude=running, update=False)
 
+            """
+            Add tasks that failed/completed but were submitted by another
+            Workflow instance (e.g. with the --detach option on)
+            """
+            for name, task in self.tasks.items():
+                if not task.running() and not task.done():
+                    if name in completed:
+                        completed.remove(name)
+                        pending.add(name)
+
+                    if name in failed:
+                        failed.remove(name)
+                        pending.add(name)
+
         self.running = False
         if failed:
             logger.error(f"one or more tasks did not complete: "
