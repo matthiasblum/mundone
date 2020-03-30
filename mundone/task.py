@@ -393,27 +393,6 @@ class Task(object):
         self._collect()
         self.status = STATUS_CANCELLED
 
-    @staticmethod
-    def collect_alt(output_file: str) -> tuple:
-        basepath = output_file[:-6]
-        input_file = basepath + ".in.p"
-        stderr_file = basepath + ".err"
-        stdout_file = basepath + ".out"
-
-        with open(stderr_file, "rt") as fh:
-            stderr = fh.read()
-
-        with open(stdout_file, "rt") as fh:
-            stdout = fh.read()
-
-        with open(output_file, "rb") as fh:
-            output, status, start_time, end_time = pickle.load(fh)
-
-        for f in (input_file, output_file, stderr_file, stdout_file):
-            os.remove(f)
-
-        return status, output, stdout, stderr, start_time, end_time
-
 
 class TaskOutput(object):
     def __init__(self, task: Task):
