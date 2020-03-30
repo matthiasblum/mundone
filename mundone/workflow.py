@@ -402,14 +402,14 @@ class Workflow(object):
         con.execute(
             """
             UPDATE task
-            SET status = ?, result = ?, stdout = ?, stderr = ?,
+            SET status = ?, basepath = ?, result = ?, stdout = ?, stderr = ?,
                 submit_time = ?, start_time = ?, end_time = ?,
                 active = ?
             WHERE name = ? AND wid = ? AND active = 1
             """,
             (
-                task.status, json.dumps(task.result), task.stdout,
-                task.stderr, self.strftime(task.submit_time),
+                task.status, task.basepath, json.dumps(task.result),
+                task.stdout, task.stderr, self.strftime(task.submit_time),
                 self.strftime(task.start_time), self.strftime(task.end_time),
                 0 if add_new else 1, task.name, self.id
             )
