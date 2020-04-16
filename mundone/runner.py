@@ -3,7 +3,6 @@
 
 import importlib
 import pickle
-import struct
 import sys
 from datetime import datetime
 
@@ -13,14 +12,14 @@ def main():
     dst = sys.argv[2]
 
     with open(src, "rb") as fh:
-        k, l, = struct.unpack("<2I", fh.read(8))
-        dirname = fh.read(k).decode()
-        module_name = fh.read(l).decode()
+        module_path = pickle.load(fh).decode()
+        module_name = pickle.load(fh).decode()
+        p = pickle.load(fh)
 
-        sys.path.append(dirname)
+        sys.path.append(module_path)
         importlib.import_module(module_name)
 
-        fn, args, kwargs = pickle.loads(fh.read())
+        fn, args, kwargs = pickle.loads(p)
 
     start_time = datetime.now()
 
@@ -44,4 +43,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-    
