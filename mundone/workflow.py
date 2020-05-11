@@ -307,7 +307,7 @@ class Workflow(object):
                 self.persit_task(task, add_new=False)
                 running[name] = task
                 attempts[name] += 1
-                logger.info(f"{name:<30} running")
+                logger.info(f"{name:<40} running")
 
         pending -= set(running)
         completed = set()
@@ -320,17 +320,17 @@ class Workflow(object):
                 if not task.done():
                     continue
                 elif task.completed():
-                    logger.info(f"{name:<30} done")
+                    logger.info(f"{name:<40} done")
                     completed.add(name)
                     self.persit_task(task, add_new=False)
                 elif attempts[name] <= max_retries:
-                    logger.error(f"{name:<30} failed: retry")
+                    logger.error(f"{name:<40} failed: retry")
                     self.persit_task(task, add_new=True)
                     task.start(dir=self.dir)
                     self.persit_task(task, add_new=False)
                     attempts[name] += 1
                 else:
-                    logger.error(f"{name:<30} failed")
+                    logger.error(f"{name:<40} failed")
                     failed.append(name)
                     self.persit_task(task, add_new=False)
 
@@ -349,7 +349,7 @@ class Workflow(object):
                         task.terminate()
                         self.persit_task(task, add_new=False)
                         failed.append(name)
-                        logger.error(f"{name:<30} cancelled")
+                        logger.error(f"{name:<40} cancelled")
                         break
                     elif parent not in completed:
                         pending_parents.append(parent)
@@ -360,7 +360,7 @@ class Workflow(object):
                         self.persit_task(task, add_new=False)
                         running[name] = task
                         attempts[name] += 1
-                        logger.info(f"{name:<30} running")
+                        logger.info(f"{name:<40} running")
 
             pending -= set(running) | set(failed)
             self.get_tasks(exclude=running, update=False)
