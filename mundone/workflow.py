@@ -44,6 +44,7 @@ class Workflow(object):
             self.database = os.path.join(self.dir, DBNAME)
 
         if not os.path.isfile(self.database):
+            os.makedirs(os.path.dirname(self.database), exist_ok=True)
             try:
                 open(self.database, "w").close()
             except (FileNotFoundError, PermissionError):
