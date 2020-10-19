@@ -30,7 +30,7 @@ def gen_random_string(k: int):
     return ''.join(choices(ascii_lowercase + digits, k=k))
 
 
-class Task(object):
+class Task:
     def __init__(self, fn: Callable, args: Union[list, tuple]=list(),
                  kwargs: dict=dict(), **_kwargs):
         if not callable(fn):
@@ -394,7 +394,7 @@ class Task(object):
         self.status = STATUS_CANCELLED
 
 
-class TaskOutput(object):
+class TaskOutput:
     def __init__(self, task: Task):
         self._task = task
 

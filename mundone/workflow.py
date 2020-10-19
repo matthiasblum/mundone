@@ -25,7 +25,7 @@ if not logger.hasHandlers():
 DBNAME = "mundone.sqlite"
 
 
-class Workflow(object):
+class Workflow:
     def __init__(self, tasks: Collection[Task], **kwargs):
         self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
@@ -110,7 +110,7 @@ class Workflow(object):
             )
             con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
-    def get_tasks(self, exclude: Collection[str]=list(), update: bool=False):
+    def get_tasks(self, exclude: Collection[str] = [], update: bool = False):
         con = sqlite3.connect(self.database)
 
         cur = con.execute(
@@ -179,8 +179,8 @@ class Workflow(object):
         cur.close()
         con.close()
 
-    def run(self, tasks: Collection[str]=list(), dry_run: bool=False,
-            max_retries: int=0, monitor: bool=True) -> bool:
+    def run(self, tasks: Collection[str] = [], dry_run: bool = False,
+            max_retries: int = 0, monitor: bool = True) -> bool:
         """
 
         Args:
@@ -287,7 +287,7 @@ class Workflow(object):
         return tasks
 
     def run_tasks(self, pending: Collection[str], max_retries: int,
-                  seconds: int=1) -> bool:
+                  seconds: int = 1) -> bool:
         child2parents = {}
         attempts = {}
         for name in pending:
@@ -463,14 +463,15 @@ class Workflow(object):
         Args:
             tasks:
                 Dictionary of all tasks in the workflow.
+            leaves:
+                Collection of the name of "leaf" or final tasks,
+                i.e. tasks ending the workflow, without other tasks
+                to run after them (either because there is none,
+                  or because the following tasks are ignored)
             name:
                 Name of the task to evaluate.
             result:
                 Set of tasks that need to be run
-            is_leaf:
-                True if this task is a "leaf", i.e. it is not evaluated
-                because of one of its descendants but because it was
-                explicitly passed to Workflow.start()
 
         Returns:
             True if the task's children need to be run, False otherwise.
