@@ -172,7 +172,7 @@ class Workflow:
                     UPDATE task
                     SET status = ?, result = ?, stdout = ?, stderr = ?,
                         submit_time = ?, start_time = ?, end_time = ?
-                    WHERE name = ? AND id = ? AND active = 1
+                    WHERE name = ? AND wid = ? AND active = 1
                     """, changes
                 )
                 con.commit()
