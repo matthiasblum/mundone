@@ -157,7 +157,7 @@ class Workflow:
                         changes.append((
                             task.status,
                             json.dumps(task.result),
-                            task.stdour,
+                            task.stdout,
                             task.stderr,
                             self.strftime(task.submit_time),
                             self.strftime(task.start_time),
