@@ -143,11 +143,10 @@ class Task:
             for _ in range(len(module_name.split('.'))):
                 module_path = os.path.dirname(module_path)
 
-            p = pickle.dumps((self.fn, self.args, self.kwargs))
-
+            p = pickle.dumps((self.fn, self.args, self.kwargs), protocol=0)
             if module_name == "__main__":
                 module_name = os.path.basename(sys.argv[0]).rsplit('.', 1)[0]
-                p = p.replace(b"c__main__", b"c" + module_name.encode())
+                p = p.replace(b"(c__main__", f"(c{module_name}".encode())
 
             pickle.dump(module_path.encode(), fh)
             pickle.dump(module_name.encode(), fh)
@@ -334,6 +333,7 @@ class Task:
             except IndexError:
                 pass
             finally:
+                # TODO handle ZOMBI case
                 if status in ("DONE", "EXIT"):
                     returncode = self._collect()
                     self.jobid = None
