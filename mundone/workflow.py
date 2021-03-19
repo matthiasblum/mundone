@@ -33,7 +33,10 @@ class Workflow:
             raise ValueError("'id' expects a string")
 
         self.dir = kwargs.get("dir", os.getcwd())
-        os.makedirs(self.dir, exist_ok=True)
+        try:
+            os.makedirs(self.dir)
+        except FileExistsError:
+            pass
 
         database = kwargs.get("database")
         if database:
@@ -44,7 +47,11 @@ class Workflow:
             self.database = os.path.join(self.dir, DBNAME)
 
         if not os.path.isfile(self.database):
-            os.makedirs(os.path.dirname(self.database), exist_ok=True)
+            try:
+                os.makedirs(os.path.dirname(self.database))
+            except FileExistsError:
+                pass
+
             try:
                 open(self.database, "w").close()
             except (FileNotFoundError, PermissionError):
@@ -305,7 +312,7 @@ class Workflow:
             if all([parent not in pending for parent in child2parents[name]]):
                 task = self.tasks[name]
                 task.start(dir=self.dir)
-                self.persit_task(task, add_new=False)
+                self.persist_task(task, add_new=False)
                 running[name] = task
                 attempts[name] += 1
                 logger.info(f"{name:<40} running")
@@ -323,17 +330,17 @@ class Workflow:
                 elif task.completed():
                     logger.info(f"{name:<40} done")
                     completed.add(name)
-                    self.persit_task(task, add_new=False)
+                    self.persist_task(task, add_new=False)
                 elif attempts[name] <= max_retries:
                     logger.error(f"{name:<40} failed: retry")
-                    self.persit_task(task, add_new=True)
+                    self.persist_task(task, add_new=True)
                     task.start(dir=self.dir)
-                    self.persit_task(task, add_new=False)
+                    self.persist_task(task, add_new=False)
                     attempts[name] += 1
                 else:
                     logger.error(f"{name:<40} failed")
                     failed.append(name)
-                    self.persit_task(task, add_new=False)
+                    self.persist_task(task, add_new=False)
 
             _running = {}
             for name, task in running.items():
@@ -348,7 +355,7 @@ class Workflow:
                         # Cancel child
                         task = self.tasks[name]
                         task.terminate()
-                        self.persit_task(task, add_new=False)
+                        self.persist_task(task, add_new=False)
                         failed.append(name)
                         logger.error(f"{name:<40} cancelled")
                         break
@@ -358,7 +365,7 @@ class Workflow:
                     if not pending_parents:
                         task = self.tasks[name]
                         task.start(dir=self.dir)
-                        self.persit_task(task, add_new=False)
+                        self.persist_task(task, add_new=False)
                         running[name] = task
                         attempts[name] += 1
                         logger.info(f"{name:<40} running")
@@ -391,7 +398,7 @@ class Workflow:
 
         return success
 
-    def persit_task(self, task: Task, add_new: bool):
+    def persist_task(self, task: Task, add_new: bool):
         """
 
         Args:
@@ -442,7 +449,7 @@ class Workflow:
             for task_name, task in to_kill:
                 logging.info("\t- {}".format(task_name))
                 task.terminate()
-                self.persit_task(task, add_new=False)
+                self.persist_task(task, add_new=False)
 
         self.running = False
 

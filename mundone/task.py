@@ -31,8 +31,8 @@ def gen_random_string(k: int):
 
 
 class Task:
-    def __init__(self, fn: Callable, args: Union[list, tuple]=list(),
-                 kwargs: dict=dict(), **_kwargs):
+    def __init__(self, fn: Callable, args: Union[list, tuple] = list(),
+                 kwargs: dict = dict(), **_kwargs):
         if not callable(fn):
             raise TypeError(f"'{fn}' is not callable")
         elif not isinstance(args, (list, tuple)):
@@ -127,10 +127,13 @@ class Task:
         elif self.status == STATUS_SUCCESS:
             return "done"
 
-    def _pack(self, dir: str):
-        os.makedirs(dir, exist_ok=True)
+    def _pack(self, workdir: str):
+        try:
+            os.makedirs(workdir)
+        except FileExistsError:
+            pass
 
-        fd, self.basepath = mkstemp(prefix=self.name, dir=dir)
+        fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
         os.close(fd)
         os.remove(self.basepath)
 
@@ -177,11 +180,14 @@ class Task:
         self.kwargs = kwargs
         return True
 
-    def start(self, dir: str=os.getcwd(), trust_scheduler: bool=True):
+    def start(self, **kwargs):
+        workdir = kwargs.get("dir", os.getcwd())
+        trust_scheduler = kwargs.get("trust_scheduler", True)
+
         if self.running() or not self.ready():
             return
 
-        self._pack(dir)
+        self._pack(workdir)
         stdout_file = self.basepath + SUFFIX_STDOUT
         stderr_file = self.basepath + SUFFIX_STDERR
         input_file = self.basepath + SUFFIX_INPUT
