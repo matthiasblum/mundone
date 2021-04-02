@@ -303,17 +303,24 @@ class Task:
             self.result = None
             self.status = STATUS_ERROR
             self.end_time = datetime.now()
-        else:
-            res = pickle.load(fh)
-            fh.close()
-            os.remove(self.basepath + SUFFIX_RESULT)
+            return returncode
 
+        try:
+            res = pickle.load(fh)
+        except EOFError:
+            # Output file empty (consider that the task failed)
+            self.result = None
+            self.status = STATUS_ERROR
+            self.end_time = datetime.now()
+        else:
             self.result = res[0]
             returncode = res[1]
             self.start_time = res[2]
             self.end_time = res[3]
-
-        return returncode
+        finally:
+            fh.close()
+            os.remove(self.basepath + SUFFIX_RESULT)
+            return returncode
 
     def poll(self):
         if self.status != STATUS_RUNNING:
