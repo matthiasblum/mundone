@@ -216,19 +216,13 @@ class Task:
                     "-R", f"rusage[mem={mem}]"
                 ]
 
-            tmp = self.scheduler.get("tmp")
-            if isinstance(tmp, int):
-                cmd += [
-                    "-R", f"select[tmp>{tmp}]",
-                    "-R", f"rusage[tmp={tmp}]"
-                ]
-
-            tmp = self.scheduler.get("scratch")
-            if isinstance(tmp, int):
-                cmd += [
-                    "-R", f"select[scratch>{tmp}]",
-                    "-R", f"rusage[scratch={tmp}]"
-                ]
+            for key in ["tmp", "scratch"]:
+                tmp = self.scheduler.get(key)
+                if isinstance(tmp, int):
+                    cmd += [
+                        "-R", f"select[{key}>{tmp}]",
+                        "-R", f"rusage[{key}={tmp}]"
+                    ]
 
             cmd += ["-o", stdout_file, "-e", stderr_file]
             cmd += [
@@ -241,7 +235,7 @@ class Task:
             outs, errs = Popen(cmd, stdout=PIPE).communicate()
             outs = outs.strip().decode()
 
-            # Expected format: Job <job_id> is submitted to queue <queue>.
+            # Expected: Job <job_id> is submitted to [default ]queue <queue>.
             self.jobid = int(outs.split('<')[1].split('>')[0])
         else:
             cmd = [
