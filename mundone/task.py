@@ -54,6 +54,7 @@ class Task:
 
         # LSF job
         self.jobid = None
+        self.unknown_start = None  # first time job status is UNKWN
 
         self.stdout = None
         self.stderr = None
@@ -333,26 +334,36 @@ class Task:
             cmd = ["bjobs", str(self.jobid)]
             outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
             outs = outs.strip().decode()
-            status = None
 
             try:
                 status = outs.splitlines()[1].split()[2]
             except IndexError:
-                pass
-            finally:
-                # TODO handle ZOMBI case
-                if status in ("DONE", "EXIT"):
-                    returncode = self._collect()
-                    self.jobid = None
-                    if self.trust_scheduler:
-                        if status == "DONE":
-                            self.status = STATUS_SUCCESS
-                        else:
-                            self.status = STATUS_ERROR
-                    elif returncode == 0:
+                return
+
+            if status in ("DONE", "EXIT"):
+                returncode = self._collect()
+                self.jobid = None
+                if self.trust_scheduler:
+                    if status == "DONE":
                         self.status = STATUS_SUCCESS
                     else:
                         self.status = STATUS_ERROR
+                elif returncode == 0:
+                    self.status = STATUS_SUCCESS
+                else:
+                    self.status = STATUS_ERROR
+            elif status == "RUN":
+                # Reset unknown status timer
+                self.unknown_start = None
+            elif status == "UNKWN":
+                now = datetime.now()
+                if self.unknown_start is None:
+                    self.unknown_start = now
+                elif (now - self.unknown_start).total_seconds() >= 3600:
+                    self.terminate(force=True)
+            elif status == "ZOMBI":
+                self.terminate(force=True)
+
         elif self.basepath and os.path.isfile(self.basepath + SUFFIX_RESULT):
             returncode = self._collect()
             if returncode == 0:
@@ -369,12 +380,16 @@ class Task:
     def done(self) -> bool:
         return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
 
-    def terminate(self):
+    def terminate(self, force: bool = False):
         if self.proc is not None:
             self.proc.kill()
             self.proc = None
         elif self.jobid is not None:
-            cmd = ["bkill", str(self.jobid)]
+            if force:
+                cmd = ["bkill", "-r", str(self.jobid)]
+            else:
+                cmd = ["bkill", str(self.jobid)]
+
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
             self.jobid = None
 
