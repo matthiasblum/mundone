@@ -255,7 +255,7 @@ class Task:
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
 
-    def wait(self, seconds: int=10):
+    def wait(self, seconds: int = 10):
         while not self.done():
             self.poll()
             time.sleep(seconds)
@@ -432,7 +432,7 @@ class TaskOutput:
         return self._task.name
 
 
-def as_completed(tasks: Sequence[Task], seconds: int=10):
+def as_completed(tasks: Sequence[Task], seconds: int = 10):
     while tasks:
         _tasks = []
 
