@@ -7,7 +7,8 @@ import sqlite3
 import time
 import sys
 from datetime import datetime
-from typing import Collection, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 from .task import Task
 
@@ -26,7 +27,7 @@ DBNAME = "mundone.sqlite"
 
 
 class Workflow:
-    def __init__(self, tasks: Collection[Task], **kwargs):
+    def __init__(self, tasks: Sequence[Task], **kwargs):
         self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
         if not isinstance(self.id, str):
@@ -117,7 +118,7 @@ class Workflow:
             )
             con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
-    def get_tasks(self, exclude: Collection[str] = [], update: bool = False):
+    def get_tasks(self, exclude: Sequence[str] = [], update: bool = False):
         con = sqlite3.connect(self.database)
 
         cur = con.execute(
@@ -186,7 +187,7 @@ class Workflow:
         cur.close()
         con.close()
 
-    def run(self, tasks: Collection[str] = [], dry_run: bool = False,
+    def run(self, tasks: Sequence[str] = [], dry_run: bool = False,
             max_retries: int = 0, monitor: bool = True) -> bool:
         """
 
@@ -234,7 +235,25 @@ class Workflow:
         self.running = True
         return self.run_tasks(tasks, max_retries)
 
-    def init_tasks(self, tasks: Collection[str], dry_run: bool) -> List[str]:
+    def get_remaining_tasks(self) -> List[str]:
+        # Find tasks without descendants
+        leaves = set(self.tasks.keys())
+        for task in self.tasks.values():
+            for parent_name in task.requires:
+                try:
+                    leaves.remove(parent_name)
+                except KeyError:
+                    continue
+
+        # Remove completed leaves
+        tasks = []
+        for name in leaves:
+            if not self.tasks[name].completed():
+                tasks.append(name)
+
+        return tasks
+
+    def init_tasks(self, tasks: Sequence[str], dry_run: bool) -> List[str]:
         """
 
         Args:
@@ -293,7 +312,7 @@ class Workflow:
 
         return tasks
 
-    def run_tasks(self, pending: Collection[str], max_retries: int,
+    def run_tasks(self, pending: Sequence[str], max_retries: int,
                   seconds: int = 1) -> bool:
         child2parents = {}
         attempts = {}
@@ -471,7 +490,7 @@ class Workflow:
             tasks:
                 Dictionary of all tasks in the workflow.
             leaves:
-                Collection of the name of "leaf" or final tasks,
+                Sequence of the name of "leaf" or final tasks,
                 i.e. tasks ending the workflow, without other tasks
                 to run after them (either because there is none,
                   or because the following tasks are ignored)
