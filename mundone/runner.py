@@ -28,7 +28,7 @@ def main():
         exc_type, exc_obj, exc_tb = sys.exc_info()
 
         # line_no = exc_tb.tb_lineno
-        sys.stderr.write("{}: {}\n".format(exc_type, e))
+        sys.stderr.write(f"{exc_type}: {e}\n")
         result = None
         returncode = 2  # error status code (see `mundone.task`)
     else:

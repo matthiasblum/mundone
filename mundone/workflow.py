@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import argparse
 import json
 import logging
 import os
@@ -7,7 +8,6 @@ import sqlite3
 import time
 import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Set
 from typing import Dict, List, Optional, Sequence, Set
 
 from .task import Task
@@ -466,7 +466,7 @@ class Workflow:
         if to_kill:
             logging.info("terminating running tasks")
             for task_name, task in to_kill:
-                logging.info("\t- {}".format(task_name))
+                logging.info(f"\t- {task_name}")
                 task.terminate()
                 self.persist_task(task, add_new=False)
 
@@ -548,3 +548,69 @@ class Workflow:
             return None
         else:
             return date_string
+
+
+def query_db():
+    parser = argparse.ArgumentParser(description="Mundone SQLite database "
+                                                 "utility")
+    parser.add_argument("db", metavar="mundone.sqlite", help="SQLite database")
+    parser.add_argument("-n", "--name", help="task name")
+    parser.add_argument("--all", action="store_true",
+                        help="list all tasks, not only 'active' ones")
+    parser.add_argument("--done", action="store_true",
+                        help="list successful tasks only")
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.db):
+        parser.error(f"no such file: {args.db}")
+
+    con = sqlite3.connect(args.db)
+    cur = con.cursor()
+    try:
+        if args.name:
+            cur.execute(
+                """
+                SELECT stdout, stderr 
+                FROM task 
+                WHERE name = ? AND active = 1
+                """, (args.name,))
+            row = cur.fetchone()
+            if row:
+                out, err = row
+                sys.stdout.write(f"{out}")
+                sys.stderr.write(f"{err}")
+            else:
+                sys.stderr.write(f"no records for task '{args.name}'\n")
+                sys.exit(1)
+        else:
+            cur.execute(
+                """
+                SELECT name, start_time, end_time, status, active 
+                FROM task 
+                WHERE submit_time is not NULL 
+                ORDER BY submit_time, start_time, end_time
+                """
+            )
+
+            for name, start, end, status, active in cur:
+                if not active and not args.all:
+                    continue
+                elif status is None:
+                    status = 'pending'
+                elif status == 0:
+                    status = 'done'
+                elif status == 1:
+                    status = 'running'
+                elif status == 2:
+                    status = 'failed'
+                else:
+                    status = 'cancelled'
+
+                if status != 'done' and args.done:
+                    continue
+
+                print(f"{name:<30}    {start or '':<20}    "
+                      f"{end or '':<20}    {status}")
+    finally:
+        cur.close()
+        con.close()
