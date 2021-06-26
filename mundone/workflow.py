@@ -585,7 +585,7 @@ def query_db():
         else:
             cur.execute(
                 """
-                SELECT name, start_time, end_time, status, active 
+                SELECT name, submit_time, end_time, status, active 
                 FROM task 
                 WHERE submit_time is not NULL 
                 ORDER BY submit_time, start_time, end_time
