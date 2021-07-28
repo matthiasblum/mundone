@@ -116,6 +116,9 @@ class Pool:
         for task in iter(self._queue_out.get, _OVER_RES):
             yield task
 
+        if close:
+            self._queue_in = None
+
     def terminate(self):
         if self._queue_in is not None:
             self._queue_in.put((_KILL_REQ, None))
