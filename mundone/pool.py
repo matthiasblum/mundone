@@ -96,7 +96,7 @@ class Pool:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.terminate()
+        self.close()
 
     def __del__(self):
         try:
