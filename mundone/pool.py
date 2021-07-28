@@ -96,7 +96,7 @@ class Pool:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+        self.terminate()
 
     def __del__(self):
         try:
@@ -107,16 +107,14 @@ class Pool:
     def submit(self, task: Task):
         self._queue_in.put((_TASK_REQ, task))
 
-    def as_completed(self):
-        if self._queue_in is not None:
+    def as_completed(self, close: bool = True):
+        if close:
+            self._queue_in.put((_STOP_REQ, None))
+        else:
             self._queue_in.put((_PING_REQ, None))
 
         for task in iter(self._queue_out.get, _OVER_RES):
             yield task
-
-    def close(self):
-        self._queue_in.put((_STOP_REQ, None))
-        self._queue_in = None
 
     def terminate(self):
         if self._queue_in is not None:
