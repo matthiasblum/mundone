@@ -6,38 +6,53 @@ from typing import List
 
 from .task import Task
 
+_TASK_REQ = "--task--"
+_PING_REQ = "--ping--"
+_STOP_REQ = "--stop--"
+_KILL_REQ = "--kill--"
+_OVER_RES = "--over--"
+
 
 def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
     pending = []
     running = []
-
+    sentinel = None
     while True:
         try:
-            task = src.get(block=True, timeout=15)
+            action, task = src.get(block=True, timeout=15)
         except Empty:
             pass
         else:
-            if task is None:
+            if action in (_STOP_REQ, _KILL_REQ):
+                sentinel = action
                 break
+            elif action == _TASK_REQ:
+                if len(running) < max_running:
+                    task.start(dir=workdir)
+                    running.append(task)
+                    continue
 
-            if len(running) < max_running:
-                task.start(dir=workdir)
-                running.append(task)
-                continue
+                pending.append(task)
 
-            pending.append(task)
             t = _monitor(running, pending, max_running, workdir)
             pending, running, done = t
             while done:
                 dst.put(done.pop(0))
 
-    while pending or running:
-        t = _monitor(running, pending, max_running, workdir)
-        pending, running, done = t
-        while done:
-            dst.put(done.pop(0))
+            if action == _PING_REQ:
+                dst.put(_OVER_RES)
 
-    dst.put(None)
+    if sentinel == _KILL_REQ:
+        for task in pending + running:
+            task.terminate()
+    else:
+        while pending or running:
+            t = _monitor(running, pending, max_running, workdir)
+            pending, running, done = t
+            while done:
+                dst.put(done.pop(0))
+
+    dst.put(_OVER_RES)
 
 
 def _monitor(running: List[Task], pending: List[Task], max_running: int,
@@ -81,12 +96,32 @@ class Pool:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        return False
+        self.terminate()
+
+    def __del__(self):
+        try:
+            self.terminate()
+        except Exception:
+            pass
 
     def submit(self, task: Task):
-        self._queue_in.put(task)
+        self._queue_in.put((_TASK_REQ, task))
 
     def as_completed(self):
-        self._queue_in.put(None)
-        for task in iter(self._queue_out.get, None):
+        if self._queue_in is not None:
+            self._queue_in.put((_PING_REQ, None))
+
+        for task in iter(self._queue_out.get, _OVER_RES):
             yield task
+
+    def close(self):
+        self._queue_in.put((_STOP_REQ, None))
+        self._queue_in = None
+
+    def terminate(self):
+        if self._queue_in is not None:
+            self._queue_in.put((_KILL_REQ, None))
+            self._queue_in = None
+
+            for _ in iter(self._queue_out.get, _OVER_RES):
+                pass
