@@ -16,24 +16,37 @@ _OVER_RES = "--over--"
 def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
     pending = []
     running = []
-    sentinel = None
+    closed = False
     while True:
         try:
             action, task = src.get(block=True, timeout=15)
         except Empty:
-            pass
+            action = None
         else:
-            if action in (_STOP_REQ, _KILL_REQ):
-                sentinel = action
-                break
-            elif action == _TASK_REQ:
-                if len(running) < max_running:
+            if action == _TASK_REQ:
+                if closed:
+                    # Pool closed: cancel task
+                    task.terminate()
+                    dst.put(task)
+                elif len(running) < max_running:
+                    # Pool not full: start task right away
                     task.start(dir=workdir)
                     running.append(task)
-                    continue
+                else:
+                    # Pool full: task needs to wait
+                    pending.append(task)
+            elif action == _STOP_REQ:
+                closed = True  # Stop accepting new tasks
+            elif action == _KILL_REQ:
+                closed = True
+                for task in running + pending:
+                    task.terminate()
 
-                pending.append(task)
-
+                running.clear()
+                pending.clear()
+                break
+        finally:
+            # Update running/pending/finished tasks
             t = _monitor(running, pending, max_running, workdir)
             pending, running, done = t
             while done:
@@ -42,15 +55,8 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
             if action == _PING_REQ:
                 dst.put(_OVER_RES)
 
-    if sentinel == _KILL_REQ:
-        for task in pending + running:
-            task.terminate()
-    else:
-        while pending or running:
-            t = _monitor(running, pending, max_running, workdir)
-            pending, running, done = t
-            while done:
-                dst.put(done.pop(0))
+            if closed and not running and not pending:
+                break  # No more running/waiting tasks
 
     dst.put(_OVER_RES)
 
@@ -107,8 +113,8 @@ class Pool:
     def submit(self, task: Task):
         self._queue_in.put((_TASK_REQ, task))
 
-    def as_completed(self, close: bool = True):
-        if close:
+    def as_completed(self, wait: bool = False):
+        if wait:
             self._queue_in.put((_STOP_REQ, None))
         else:
             self._queue_in.put((_PING_REQ, None))
@@ -116,7 +122,7 @@ class Pool:
         for task in iter(self._queue_out.get, _OVER_RES):
             yield task
 
-        if close:
+        if wait:
             self._queue_in = None
 
     def terminate(self):
