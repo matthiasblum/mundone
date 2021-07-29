@@ -44,7 +44,7 @@ class Task:
         self.args = args
         self.kwargs = kwargs
 
-        self.name = _kwargs.get("name", fn.__name__)
+        self.name = str(_kwargs.get("name", fn.__name__))
         self.status = STATUS_PENDING
         self.basepath = None
 
