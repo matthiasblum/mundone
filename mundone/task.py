@@ -212,17 +212,17 @@ class Task:
             mem = self.scheduler.get("mem")
             if isinstance(mem, int):
                 cmd += [
-                    "-M", str(mem),
-                    "-R", f"select[mem>{mem}]",
-                    "-R", f"rusage[mem={mem}]"
+                    "-M", f"{mem}M",
+                    "-R", f"select[mem>{mem}M]",
+                    "-R", f"rusage[mem={mem}M]"
                 ]
 
             for key in ["tmp", "scratch"]:
                 tmp = self.scheduler.get(key)
                 if isinstance(tmp, int):
                     cmd += [
-                        "-R", f"select[{key}>{tmp}]",
-                        "-R", f"rusage[{key}={tmp}]"
+                        "-R", f"select[{key}>{tmp}M]",
+                        "-R", f"rusage[{key}={tmp}M]"
                     ]
 
             cmd += ["-o", stdout_file, "-e", stderr_file]
