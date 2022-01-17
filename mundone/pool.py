@@ -28,6 +28,7 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
                 # Pool not full: start task right away
                 task.start(dir=workdir)
                 running.append(task)
+                continue
             else:
                 # Pool full: task needs to wait
                 pending.append(task)
@@ -37,8 +38,6 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
             for task in running + pending:
                 task.terminate()
 
-            running.clear()
-            pending.clear()
             break
 
         # Update running/pending/finished tasks
@@ -49,7 +48,7 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
 
         if action == _PING_REQ:
             dst.put(_OVER_RES)
-        elif not pending and not running and notify_when_done:
+        elif notify_when_done and not pending and not running:
             # No more running/waiting tasks
             dst.put(_OVER_RES)
             notify_when_done = False
