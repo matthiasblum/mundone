@@ -10,7 +10,7 @@ from random import choices
 from string import ascii_lowercase, digits
 from subprocess import Popen, PIPE, DEVNULL
 from tempfile import mkstemp
-from typing import Callable, Optional, Sequence, Union
+from typing import Callable, Optional, Sequence
 
 from . import runner
 
@@ -31,8 +31,8 @@ def gen_random_string(k: int):
 
 
 class Task:
-    def __init__(self, fn: Callable, args: Union[list, tuple] = list(),
-                 kwargs: dict = dict(), **_kwargs):
+    def __init__(self, fn: Callable, args: Optional[list] = None,
+                 kwargs: Optional[dict] = None, **_kwargs):
         if not callable(fn):
             raise TypeError(f"'{fn}' is not callable")
         elif not isinstance(args, (list, tuple)):
@@ -41,8 +41,8 @@ class Task:
             raise TypeError("Task() arg 3 must be a dict")
 
         self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
+        self.args = args if args is not None else []
+        self.kwargs = kwargs if kwargs is not None else {}
 
         self.name = str(_kwargs.get("name", fn.__name__))
         self.status = STATUS_PENDING
@@ -261,39 +261,40 @@ class Task:
             time.sleep(seconds)
 
     def _collect(self) -> Optional[int]:
-        if self.file_handlers:
+        if self.jobid is not None:
+            """
+            LSF can take some time to flush stderr/stdout. Wait until:
+                - both files exist
+                - stdout is not empty
+            """
+            while True:
+                if os.path.isfile(self.basepath + SUFFIX_STDOUT):
+                    if os.path.isfile(self.basepath + SUFFIX_STDERR):
+                        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+                            if len(fh.read()) > 0:
+                                break
+
+                time.sleep(1)
+        elif self.file_handlers:
             fh_out, fh_err = self.file_handlers
             fh_out.close()
             fh_err.close()
             self.file_handlers = None
 
-        try:
-            fh = open(self.basepath + SUFFIX_STDOUT, "rt")
-        except (FileNotFoundError, TypeError):
-            pass
-        else:
+        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
             self.stdout = fh.read()
-            fh.close()
-            os.remove(self.basepath + SUFFIX_STDOUT)
 
-        try:
-            fh = open(self.basepath + SUFFIX_STDERR, "rt")
-        except (FileNotFoundError, TypeError):
-            pass
-        else:
+        with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
             self.stderr = fh.read()
-            fh.close()
-            os.remove(self.basepath + SUFFIX_STDERR)
 
-        try:
-            os.remove(self.basepath + SUFFIX_INPUT)
-        except (FileNotFoundError, TypeError):
-            pass
+        os.remove(self.basepath + SUFFIX_INPUT)
+        os.remove(self.basepath + SUFFIX_STDOUT)
+        os.remove(self.basepath + SUFFIX_STDERR)
 
         returncode = None
         try:
             fh = open(self.basepath + SUFFIX_RESULT, "rb")
-        except (FileNotFoundError, TypeError):
+        except FileNotFoundError:
             # Process/job: killed the output file might not exist
             self.result = None
             self.status = STATUS_ERROR
@@ -383,7 +384,6 @@ class Task:
     def terminate(self, force: bool = False):
         if self.proc is not None:
             self.proc.kill()
-            self.proc = None
         elif self.jobid is not None:
             if force:
                 cmd = ["bkill", "-r", str(self.jobid)]
@@ -391,28 +391,9 @@ class Task:
                 cmd = ["bkill", str(self.jobid)]
 
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
-            self.jobid = None
-
-            """
-            Wait until the stdout file exists and is not empty
-            as LSF can take some time to flush the job report to the disk
-            """
-            while True:
-                size = 0
-                try:
-                    fh = open(self.basepath + SUFFIX_STDOUT, "rt")
-                except FileNotFoundError:
-                    pass
-                else:
-                    size = len(fh.read())
-                    fh.close()
-
-                if size:
-                    break
-
-                time.sleep(1)
 
         self._collect()
+        self.proc = self.jobid = None
         self.status = STATUS_CANCELLED
 
 
