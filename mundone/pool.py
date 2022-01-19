@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import threading
 from queue import Queue, Empty
 from typing import List

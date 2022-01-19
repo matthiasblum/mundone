@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import argparse
 import json
 import logging
@@ -187,10 +185,10 @@ class Workflow:
         cur.close()
         con.close()
 
-    def run(self, tasks: Sequence[str] = [], dry_run: bool = False,
-            max_retries: int = 0, monitor: bool = True) -> bool:
+    def run(self, tasks: Optional[Sequence[str]] = None,
+            dry_run: bool = False, max_retries: int = 0,
+            monitor: bool = True) -> bool:
         """
-
         Args:
             tasks:
                 Optional sequence of task names to run. If None, then all tasks
