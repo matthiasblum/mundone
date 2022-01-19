@@ -29,13 +29,13 @@ def gen_random_string(k: int):
 
 
 class Task:
-    def __init__(self, fn: Callable, args: Optional[list] = None,
+    def __init__(self, fn: Callable, args: Optional[Sequence] = None,
                  kwargs: Optional[dict] = None, **_kwargs):
         if not callable(fn):
             raise TypeError(f"'{fn}' is not callable")
-        elif not isinstance(args, (list, tuple)):
+        elif args is not None and not isinstance(args, (list, tuple)):
             raise TypeError("Task() arg 2 must be a list or a tuple")
-        elif not isinstance(kwargs, dict):
+        elif kwargs is not None and not isinstance(kwargs, dict):
             raise TypeError("Task() arg 3 must be a dict")
 
         self.fn = fn
@@ -54,6 +54,8 @@ class Task:
         self.jobid = None
         self.unknown_start = None  # first time job status is UNKWN
 
+        self.stdout = None
+        self.stderr = None
         self.result = None
 
         self.create_time = datetime.now()
@@ -97,22 +99,6 @@ class Task:
 
     def __repr__(self) -> str:
         return self.name
-
-    @property
-    def stdout(self) -> str:
-        try:
-            with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
-                return fh.read()
-        except FileNotFoundError:
-            return ""
-
-    @property
-    def stderr(self):
-        try:
-            with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
-                return fh.read()
-        except FileNotFoundError:
-            return ""
 
     @property
     def output(self):
@@ -336,11 +322,35 @@ class Task:
                 self.status = STATUS_ERROR
 
     def _collect(self) -> Optional[int]:
-        if self.file_handlers:
+        if self.jobid is not None:
+            """
+            LSF can take some time to flush stderr/stdout. Wait until:
+                - both files exist
+                - stdout is not empty
+            """
+            while True:
+                if os.path.isfile(self.basepath + SUFFIX_STDOUT):
+                    if os.path.isfile(self.basepath + SUFFIX_STDERR):
+                        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+                            if len(fh.read()) > 0:
+                                break
+
+                time.sleep(1)
+        elif self.file_handlers:
             fh_out, fh_err = self.file_handlers
             fh_out.close()
             fh_err.close()
             self.file_handlers = None
+
+        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+            self.stdout = fh.read()
+
+        with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
+            self.stderr = fh.read()
+
+        os.unlink(self.basepath + SUFFIX_INPUT)
+        os.unlink(self.basepath + SUFFIX_STDOUT)
+        os.unlink(self.basepath + SUFFIX_STDERR)
 
         returncode = None
         try:
@@ -366,6 +376,7 @@ class Task:
             self.end_time = res[3]
         finally:
             fh.close()
+            os.unlink(self.basepath + SUFFIX_RESULT)
             return returncode
 
     def terminate(self, force: bool = False):
