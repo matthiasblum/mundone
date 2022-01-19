@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import inspect
 import os
 import pickle
@@ -56,8 +54,6 @@ class Task:
         self.jobid = None
         self.unknown_start = None  # first time job status is UNKWN
 
-        self.stdout = None
-        self.stderr = None
         self.result = None
 
         self.create_time = datetime.now()
@@ -103,6 +99,22 @@ class Task:
         return self.name
 
     @property
+    def stdout(self) -> str:
+        try:
+            with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return ""
+
+    @property
+    def stderr(self):
+        try:
+            with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return ""
+
+    @property
     def output(self):
         return TaskOutput(self)
 
@@ -136,7 +148,7 @@ class Task:
 
         fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
         os.close(fd)
-        os.remove(self.basepath)
+        os.unlink(self.basepath)
 
         input_file = self.basepath + SUFFIX_INPUT
         with open(input_file, "wb") as fh:
@@ -180,6 +192,15 @@ class Task:
         self.args = args
         self.kwargs = kwargs
         return True
+
+    def running(self) -> bool:
+        return self.status == STATUS_RUNNING
+
+    def completed(self) -> bool:
+        return self.status == STATUS_SUCCESS
+
+    def done(self) -> bool:
+        return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
 
     def start(self, **kwargs):
         workdir = kwargs.get("dir", os.getcwd())
@@ -260,64 +281,6 @@ class Task:
             self.poll()
             time.sleep(seconds)
 
-    def _collect(self) -> Optional[int]:
-        if self.jobid is not None:
-            """
-            LSF can take some time to flush stderr/stdout. Wait until:
-                - both files exist
-                - stdout is not empty
-            """
-            while True:
-                if os.path.isfile(self.basepath + SUFFIX_STDOUT):
-                    if os.path.isfile(self.basepath + SUFFIX_STDERR):
-                        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
-                            if len(fh.read()) > 0:
-                                break
-
-                time.sleep(1)
-        elif self.file_handlers:
-            fh_out, fh_err = self.file_handlers
-            fh_out.close()
-            fh_err.close()
-            self.file_handlers = None
-
-        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
-            self.stdout = fh.read()
-
-        with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
-            self.stderr = fh.read()
-
-        os.remove(self.basepath + SUFFIX_INPUT)
-        os.remove(self.basepath + SUFFIX_STDOUT)
-        os.remove(self.basepath + SUFFIX_STDERR)
-
-        returncode = None
-        try:
-            fh = open(self.basepath + SUFFIX_RESULT, "rb")
-        except FileNotFoundError:
-            # Process/job: killed the output file might not exist
-            self.result = None
-            self.status = STATUS_ERROR
-            self.end_time = datetime.now()
-            return returncode
-
-        try:
-            res = pickle.load(fh)
-        except EOFError:
-            # Output file empty (consider that the task failed)
-            self.result = None
-            self.status = STATUS_ERROR
-            self.end_time = datetime.now()
-        else:
-            self.result = res[0]
-            returncode = res[1]
-            self.start_time = res[2]
-            self.end_time = res[3]
-        finally:
-            fh.close()
-            os.remove(self.basepath + SUFFIX_RESULT)
-            return returncode
-
     def poll(self):
         if self.status != STATUS_RUNNING:
             return
@@ -372,17 +335,43 @@ class Task:
             else:
                 self.status = STATUS_ERROR
 
-    def running(self) -> bool:
-        return self.status == STATUS_RUNNING
+    def _collect(self) -> Optional[int]:
+        if self.file_handlers:
+            fh_out, fh_err = self.file_handlers
+            fh_out.close()
+            fh_err.close()
+            self.file_handlers = None
 
-    def completed(self) -> bool:
-        return self.status == STATUS_SUCCESS
+        returncode = None
+        try:
+            fh = open(self.basepath + SUFFIX_RESULT, "rb")
+        except FileNotFoundError:
+            # Process/job: killed the output file might not exist
+            self.result = None
+            self.status = STATUS_ERROR
+            self.end_time = datetime.now()
+            return returncode
 
-    def done(self) -> bool:
-        return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
+        try:
+            res = pickle.load(fh)
+        except EOFError:
+            # Output file empty (consider that the task failed)
+            self.result = None
+            self.status = STATUS_ERROR
+            self.end_time = datetime.now()
+        else:
+            self.result = res[0]
+            returncode = res[1]
+            self.start_time = res[2]
+            self.end_time = res[3]
+        finally:
+            fh.close()
+            return returncode
 
     def terminate(self, force: bool = False):
-        if self.proc is not None:
+        if self.done():
+            return
+        elif self.proc is not None:
             self.proc.kill()
         elif self.jobid is not None:
             if force:
@@ -395,6 +384,14 @@ class Task:
         self._collect()
         self.proc = self.jobid = None
         self.status = STATUS_CANCELLED
+
+    def clean(self):
+        for suffix in (SUFFIX_INPUT, SUFFIX_RESULT, SUFFIX_STDOUT,
+                       SUFFIX_STDERR):
+            try:
+                os.unlink(self.basepath + suffix)
+            except FileNotFoundError:
+                pass
 
 
 class TaskOutput:
