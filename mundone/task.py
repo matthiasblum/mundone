@@ -132,9 +132,10 @@ class Task:
         except FileExistsError:
             pass
 
-        fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
-        os.close(fd)
-        os.unlink(self.basepath)
+        if self.basepath is None:
+            fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
+            os.close(fd)
+            os.unlink(self.basepath)
 
         input_file = self.basepath + SUFFIX_INPUT
         with open(input_file, "wb") as fh:
@@ -290,7 +291,7 @@ class Task:
             except IndexError:
                 return
 
-            if status in ("DONE", "EXIT"):
+            if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
                 returncode = self._collect()
                 self.jobid = None
                 if self.trust_scheduler:
@@ -321,22 +322,15 @@ class Task:
             else:
                 self.status = STATUS_ERROR
 
-    def _collect(self) -> Optional[int]:
-        if self.jobid is not None:
-            """
-            LSF can take some time to flush stderr/stdout. Wait until:
-                - both files exist
-                - stdout is not empty
-            """
-            while True:
-                if os.path.isfile(self.basepath + SUFFIX_STDOUT):
-                    if os.path.isfile(self.basepath + SUFFIX_STDERR):
-                        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
-                            if len(fh.read()) > 0:
-                                break
+    def _lsf_stdout_ready(self) -> bool:
+        try:
+            with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+                return "Resource usage summary:" in fh.read()
+        except FileNotFoundError:
+            return False
 
-                time.sleep(1)
-        elif self.file_handlers:
+    def _collect(self) -> Optional[int]:
+        if self.file_handlers:
             fh_out, fh_err = self.file_handlers
             fh_out.close()
             fh_err.close()
@@ -354,29 +348,23 @@ class Task:
 
         returncode = None
         try:
-            fh = open(self.basepath + SUFFIX_RESULT, "rb")
-        except FileNotFoundError:
-            # Process/job: killed the output file might not exist
-            self.result = None
-            self.status = STATUS_ERROR
-            self.end_time = datetime.now()
-            return returncode
-
-        try:
-            res = pickle.load(fh)
-        except EOFError:
-            # Output file empty (consider that the task failed)
+            with open(self.basepath + SUFFIX_RESULT, "rb") as fh:
+                res = pickle.load(fh)
+        except (FileNotFoundError, EOFError):
+            """
+            The file may not exist if the task is killed, or may be empty
+            if the task failed.
+            """
             self.result = None
             self.status = STATUS_ERROR
             self.end_time = datetime.now()
         else:
+            os.unlink(self.basepath + SUFFIX_RESULT)
             self.result = res[0]
             returncode = res[1]
             self.start_time = res[2]
             self.end_time = res[3]
         finally:
-            fh.close()
-            os.unlink(self.basepath + SUFFIX_RESULT)
             return returncode
 
     def terminate(self, force: bool = False):
@@ -392,17 +380,12 @@ class Task:
 
             Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
 
+            while not self._lsf_stdout_ready():
+                time.sleep(1)
+
         self._collect()
         self.proc = self.jobid = None
         self.status = STATUS_CANCELLED
-
-    def clean(self):
-        for suffix in (SUFFIX_INPUT, SUFFIX_RESULT, SUFFIX_STDOUT,
-                       SUFFIX_STDERR):
-            try:
-                os.unlink(self.basepath + suffix)
-            except FileNotFoundError:
-                pass
 
 
 class TaskOutput:
