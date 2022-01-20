@@ -218,19 +218,19 @@ class Task:
                 cmd += ["-n", str(num_cpus), "-R", "span[hosts=1]"]
 
             mem = self.scheduler.get("mem")
-            if isinstance(mem, int):
+            if isinstance(mem, (float, int)):
                 cmd += [
-                    "-M", f"{mem}M",
-                    "-R", f"select[mem>{mem}M]",
-                    "-R", f"rusage[mem={mem}M]"
+                    "-M", f"{mem:.0f}M",
+                    "-R", f"select[mem>{mem:.0f}M]",
+                    "-R", f"rusage[mem={mem:.0f}M]"
                 ]
 
             for key in ["tmp", "scratch"]:
                 tmp = self.scheduler.get(key)
-                if isinstance(tmp, int):
+                if isinstance(tmp, (float, int)):
                     cmd += [
-                        "-R", f"select[{key}>{tmp}M]",
-                        "-R", f"rusage[{key}={tmp}M]"
+                        "-R", f"select[{key}>{tmp:.0f}M]",
+                        "-R", f"rusage[{key}={tmp:.0f}M]"
                     ]
 
             cmd += ["-o", stdout_file, "-e", stderr_file]
