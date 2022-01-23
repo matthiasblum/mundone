@@ -97,6 +97,8 @@ class Task:
                 raise TypeError("'requires' must be a sequence "
                                 "of strings or Tasks")
 
+        self.add_random_suffix = _kwargs.get("random_suffix", True)
+
     def __repr__(self) -> str:
         return self.name
 
@@ -133,9 +135,18 @@ class Task:
             pass
 
         if self.basepath is None:
-            fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
-            os.close(fd)
-            os.unlink(self.basepath)
+            if self.add_random_suffix:
+                fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
+                os.close(fd)
+                os.unlink(self.basepath)
+            else:
+                self.basepath = os.path.join(workdir, self.name)
+
+                for suffix in (SUFFIX_RESULT, SUFFIX_STDERR, SUFFIX_STDOUT):
+                    try:
+                        os.unlink(self.basepath + suffix)
+                    except FileNotFoundError:
+                        pass
 
         input_file = self.basepath + SUFFIX_INPUT
         with open(input_file, "wb") as fh:
