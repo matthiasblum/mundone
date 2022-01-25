@@ -4,8 +4,6 @@ import pickle
 import sys
 import time
 from datetime import datetime
-from random import choices
-from string import ascii_lowercase, digits
 from subprocess import Popen, PIPE, DEVNULL
 from tempfile import mkstemp
 from typing import Callable, Optional, Sequence
@@ -22,10 +20,6 @@ SUFFIX_INPUT = ".in.p"
 SUFFIX_RESULT = ".out.p"
 SUFFIX_STDOUT = ".out"
 SUFFIX_STDERR = ".err"
-
-
-def gen_random_string(k: int):
-    return ''.join(choices(ascii_lowercase + digits, k=k))
 
 
 class Task:
