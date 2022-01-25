@@ -103,7 +103,7 @@ class Workflow:
                   locked INTEGER NOT NULL DEFAULT 0,
                   shared INTEGER NOT NULL DEFAULT 0,
                   status INTEGER DEFAULT NULL,
-                  basepath TEXT DEFAULT NULL,
+                  workdir TEXT DEFAULT NULL,
                   result TEXT NOT NULL,
                   stdout TEXT DEFAULT NULL,
                   stderr TEXT DEFAULT NULL,
@@ -121,7 +121,7 @@ class Workflow:
 
         cur = con.execute(
             """
-            SELECT name, pid, status, basepath, result, stdout, stderr,
+            SELECT name, pid, status, workdir, result, stdout, stderr,
                    submit_time, start_time, end_time
             FROM task
             WHERE wid = ? AND active = 1
@@ -142,7 +142,7 @@ class Workflow:
                 # Negative value: LSF Job ID
                 task.jobid = abs(row[1])
             task.status = row[2]
-            task.basepath = row[3]
+            task.workdir = row[3]
             task.result = json.loads(row[4])
             task.stdout = row[5]
             task.stderr = row[6]
@@ -427,13 +427,13 @@ class Workflow:
         con.execute(
             """
             UPDATE task
-            SET status = ?, basepath = ?, result = ?, stdout = ?, stderr = ?,
+            SET status = ?, workdir = ?, result = ?, stdout = ?, stderr = ?,
                 submit_time = ?, start_time = ?, end_time = ?,
                 active = ?
             WHERE name = ? AND wid = ? AND active = 1
             """,
             (
-                task.status, task.basepath, json.dumps(task.result),
+                task.status, task.workdir, json.dumps(task.result),
                 task.stdout, task.stderr, self.strftime(task.submit_time),
                 self.strftime(task.start_time), self.strftime(task.end_time),
                 0 if add_new else 1, task.name, self.id

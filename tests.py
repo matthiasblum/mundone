@@ -74,4 +74,4 @@ def batch():
         tasks.append(t)
 
     for t in as_completed(tasks, seconds=0):
-        print(t.basepath, t.result)
+        print(t.workdir, t.result)
