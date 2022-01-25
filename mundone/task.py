@@ -5,7 +5,7 @@ import sys
 import time
 from datetime import datetime
 from subprocess import Popen, PIPE, DEVNULL
-from tempfile import mkstemp
+from tempfile import mkdtemp
 from typing import Callable, Optional, Sequence
 
 from . import runner
@@ -16,10 +16,10 @@ STATUS_SUCCESS = 0
 STATUS_ERROR = 2
 STATUS_CANCELLED = 3
 
-SUFFIX_INPUT = ".in.p"
-SUFFIX_RESULT = ".out.p"
-SUFFIX_STDOUT = ".out"
-SUFFIX_STDERR = ".err"
+INPUT_FILE = "input.pickle"
+OUTPUT_FILE = "output.log"
+ERROR_FILE = "error.log"
+RESULT_FILE = "output.pickle"
 
 
 class Task:
@@ -38,7 +38,7 @@ class Task:
 
         self.name = str(_kwargs.get("name", fn.__name__))
         self.status = STATUS_PENDING
-        self.basepath = None
+        self.workdir = None
 
         # Local process
         self.proc = None
@@ -123,27 +123,18 @@ class Task:
             return "done"
 
     def _pack(self, workdir: str):
+        if self.workdir is None:
+            if self.add_random_suffix:
+                self.workdir = mkdtemp(prefix=self.name, dir=workdir)
+            else:
+                self.workdir = os.path.join(workdir, self.name)
+
         try:
-            os.makedirs(workdir)
+            os.makedirs(self.workdir)
         except FileExistsError:
             pass
 
-        if self.basepath is None:
-            if self.add_random_suffix:
-                fd, self.basepath = mkstemp(prefix=self.name, dir=workdir)
-                os.close(fd)
-                os.unlink(self.basepath)
-            else:
-                self.basepath = os.path.join(workdir, self.name)
-
-                for suffix in (SUFFIX_RESULT, SUFFIX_STDERR, SUFFIX_STDOUT):
-                    try:
-                        os.unlink(self.basepath + suffix)
-                    except FileNotFoundError:
-                        pass
-
-        input_file = self.basepath + SUFFIX_INPUT
-        with open(input_file, "wb") as fh:
+        with open(os.path.join(self.workdir, INPUT_FILE), "wb") as fh:
             module = inspect.getmodule(self.fn)
             module_path = module.__file__
             module_name = module.__name__
@@ -202,10 +193,10 @@ class Task:
             return
 
         self._pack(workdir)
-        stdout_file = self.basepath + SUFFIX_STDOUT
-        stderr_file = self.basepath + SUFFIX_STDERR
-        input_file = self.basepath + SUFFIX_INPUT
-        result_file = self.basepath + SUFFIX_RESULT
+        output_file = os.path.join(self.workdir, OUTPUT_FILE)
+        error_file = os.path.join(self.workdir, ERROR_FILE)
+        input_file = os.path.join(self.workdir, INPUT_FILE)
+        result_file = os.path.join(self.workdir, RESULT_FILE)
         self.trust_scheduler = trust_scheduler
         self.proc = self.jobid = self.file_handlers = None
 
@@ -238,7 +229,7 @@ class Task:
                         "-R", f"rusage[{key}={tmp:.0f}M]"
                     ]
 
-            cmd += ["-o", stdout_file, "-e", stderr_file]
+            cmd += ["-o", output_file, "-e", error_file]
             cmd += [
                 sys.executable,
                 os.path.realpath(runner.__file__),
@@ -259,8 +250,8 @@ class Task:
                 result_file
             ]
 
-            fh_out = open(stdout_file, "wt")
-            fh_err = open(stderr_file, "wt")
+            fh_out = open(output_file, "wt")
+            fh_err = open(error_file, "wt")
             self.proc = Popen(cmd, stdout=fh_out, stderr=fh_err)
             self.file_handlers = (fh_out, fh_err)
 
@@ -320,7 +311,7 @@ class Task:
             elif status == "ZOMBI":
                 self.terminate(force=True)
 
-        elif self.basepath and os.path.isfile(self.basepath + SUFFIX_RESULT):
+        elif self.workdir and os.path.isfile(os.path.join(self.workdir, RESULT_FILE)):
             returncode = self._collect()
             if returncode == 0:
                 self.status = STATUS_SUCCESS
@@ -329,7 +320,7 @@ class Task:
 
     def _lsf_stdout_ready(self) -> bool:
         try:
-            with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+            with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
                 return "Resource usage summary:" in fh.read()
         except FileNotFoundError:
             return False
@@ -341,19 +332,19 @@ class Task:
             fh_err.close()
             self.file_handlers = None
 
-        with open(self.basepath + SUFFIX_STDOUT, "rt") as fh:
+        with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
             self.stdout = fh.read()
 
-        with open(self.basepath + SUFFIX_STDERR, "rt") as fh:
+        with open(os.path.join(self.workdir, ERROR_FILE), "rt") as fh:
             self.stderr = fh.read()
 
-        os.unlink(self.basepath + SUFFIX_INPUT)
-        os.unlink(self.basepath + SUFFIX_STDOUT)
-        os.unlink(self.basepath + SUFFIX_STDERR)
+        os.unlink(os.path.join(self.workdir, INPUT_FILE))
+        os.unlink(os.path.join(self.workdir, OUTPUT_FILE))
+        os.unlink(os.path.join(self.workdir, ERROR_FILE))
 
         returncode = None
         try:
-            with open(self.basepath + SUFFIX_RESULT, "rb") as fh:
+            with open(os.path.join(self.workdir, RESULT_FILE), "rb") as fh:
                 res = pickle.load(fh)
         except (FileNotFoundError, EOFError):
             """
@@ -364,12 +355,13 @@ class Task:
             self.status = STATUS_ERROR
             self.end_time = datetime.now()
         else:
-            os.unlink(self.basepath + SUFFIX_RESULT)
+            os.unlink(os.path.join(self.workdir, RESULT_FILE))
             self.result = res[0]
             returncode = res[1]
             self.start_time = res[2]
             self.end_time = res[3]
         finally:
+            os.rmdir(self.workdir)
             return returncode
 
     def terminate(self, force: bool = False):
