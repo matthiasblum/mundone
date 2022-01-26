@@ -116,7 +116,11 @@ class Workflow:
             )
             con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
-    def get_tasks(self, exclude: Sequence[str] = [], update: bool = False):
+    def get_tasks(self, exclude: Optional[Sequence[str]] = None,
+                  update: bool = False):
+        if exclude is None:
+            exclude = []
+
         con = sqlite3.connect(self.database)
 
         cur = con.execute(
@@ -141,6 +145,7 @@ class Workflow:
                 # Positive value: Process ID
                 # Negative value: LSF Job ID
                 task.jobid = abs(row[1])
+
             task.status = row[2]
             task.workdir = row[3]
             task.result = json.loads(row[4])
