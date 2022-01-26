@@ -326,7 +326,12 @@ class Task:
             return False
 
     def _collect(self) -> Optional[int]:
-        if self.file_handlers:
+        if self.workdir is None:
+            # Task cancelled before started
+            self.result = None
+            self.end_time = datetime.now()
+            return None
+        elif self.file_handlers:
             fh_out, fh_err = self.file_handlers
             fh_out.close()
             fh_err.close()
