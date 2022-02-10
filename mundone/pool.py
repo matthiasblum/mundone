@@ -1,7 +1,5 @@
 from threading import Thread
 from queue import Queue, Empty
-import sys
-import time
 
 from .task import Task
 
@@ -12,14 +10,14 @@ _KILL_REQ = "--kill--"
 _OVER_RES = "--over--"
 
 
-def _observer(src: Queue, dst: Queue):
+def _worker(src: Queue, dst: Queue):
     for task in iter(src.get, None):
         task.poll()
         dst.put(task)
 
 
-def _manager(main_req: Queue, main_res: Queue, obs_req: Queue, obs_res: Queue,
-             num_observers: int, max_running: int, workdir: str):
+def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
+             num_workers: int, max_running: int, workdir: str):
     pending = []
     running = []
     notify_when_done = False
@@ -47,18 +45,13 @@ def _manager(main_req: Queue, main_res: Queue, obs_req: Queue, obs_res: Queue,
 
             break
 
-        sys.stderr.write(f"WAIT- run: {len(running)}, pend: {len(pending)}\n")
-        sys.stderr.flush()
-
         # Update running/pending/finished tasks
-        ts = time.time()
-
         for task in running:
-            obs_req.put(task)
+            sec_req.put(task)
 
         tmp_running = []
         for _ in range(len(running)):
-            task = obs_res.get()
+            task = sec_res.get()
 
             if task.running():
                 tmp_running.append(task)
@@ -77,9 +70,6 @@ def _manager(main_req: Queue, main_res: Queue, obs_req: Queue, obs_res: Queue,
             task.start(dir=workdir)
             running.append(task)
 
-        sys.stderr.write(f"OBS--: secs: {time.time() - ts:.0f}, run: {len(running)}, pend: {len(pending)}\n")
-        sys.stderr.flush()
-
         if action == _PING_REQ:
             main_res.put(_OVER_RES)
         elif notify_when_done and not pending and not running:
@@ -87,8 +77,8 @@ def _manager(main_req: Queue, main_res: Queue, obs_req: Queue, obs_res: Queue,
             main_res.put(_OVER_RES)
             notify_when_done = False
 
-    for _ in range(num_observers):
-        obs_res.put(None)
+    for _ in range(num_workers):
+        sec_res.put(None)
 
     main_res.put(_OVER_RES)
 
@@ -100,20 +90,20 @@ class Pool:
 
         self._main_req = Queue()
         self._main_res = Queue()
-        self._obs_req = Queue()
-        self._obs_res = Queue()
+        self._sec_req = Queue()
+        self._sec_res = Queue()
 
-        self._observers = []
+        self._workers = []
         for _ in range(max(1, threads - 1)):
-            t = Thread(target=_observer,
-                       args=(self._obs_req, self._obs_res))
+            t = Thread(target=_worker,
+                       args=(self._sec_req, self._sec_res))
             t.start()
-            self._observers.append(t)
+            self._workers.append(t)
 
         self._manager = Thread(target=_manager,
                                args=(self._main_req, self._main_res,
-                                     self._obs_req, self._obs_res,
-                                     len(self._observers), self._max_running,
+                                     self._sec_req, self._sec_res,
+                                     len(self._workers), self._max_running,
                                      self._dir))
         self._manager.start()
 
