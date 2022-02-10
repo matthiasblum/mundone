@@ -1,6 +1,7 @@
 import inspect
 import os
 import pickle
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -366,7 +367,7 @@ class Task:
             self.start_time = res[2]
             self.end_time = res[3]
         finally:
-            os.rmdir(self.workdir)
+            shutil.rmtree(self.workdir)
             return returncode
 
     def terminate(self, force: bool = False):
