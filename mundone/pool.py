@@ -1,6 +1,7 @@
-import threading
+from threading import Thread
 from queue import Queue, Empty
-from typing import List
+import sys
+import time
 
 from .task import Task
 
@@ -11,13 +12,20 @@ _KILL_REQ = "--kill--"
 _OVER_RES = "--over--"
 
 
-def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
+def _observer(src: Queue, dst: Queue):
+    for task in iter(src.get, None):
+        task.poll()
+        dst.put(task)
+
+
+def _manager(main_req: Queue, main_res: Queue, obs_req: Queue, obs_res: Queue,
+             num_observers: int, max_running: int, workdir: str):
     pending = []
     running = []
     notify_when_done = False
     while True:
         try:
-            action, task = src.get(block=True, timeout=15)
+            action, task = main_req.get(block=True, timeout=15)
         except Empty:
             action = task = None
 
@@ -26,10 +34,11 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
                 # Pool not full: start task right away
                 task.start(dir=workdir)
                 running.append(task)
-                continue
             else:
                 # Pool full: task needs to wait
                 pending.append(task)
+
+            continue
         elif action == _WAIT_REQ:
             notify_when_done = True
         elif action == _KILL_REQ:
@@ -38,58 +47,75 @@ def _manager(src: Queue, dst: Queue, max_running: int, workdir: str):
 
             break
 
+        sys.stderr.write(f"WAIT- run: {len(running)}, pend: {len(pending)}\n")
+        sys.stderr.flush()
+
         # Update running/pending/finished tasks
-        t = _monitor(running, pending, max_running, workdir)
-        pending, running, done = t
-        while done:
-            dst.put(done.pop(0))
+        ts = time.time()
 
-        if action == _PING_REQ:
-            dst.put(_OVER_RES)
-        elif notify_when_done and not pending and not running:
-            # No more running/waiting tasks
-            dst.put(_OVER_RES)
-            notify_when_done = False
+        for task in running:
+            obs_req.put(task)
 
-    dst.put(_OVER_RES)
+        tmp_running = []
+        for _ in range(len(running)):
+            task = obs_res.get()
 
+            if task.running():
+                tmp_running.append(task)
+            else:
+                main_res.put(task)
 
-def _monitor(running: List[Task], pending: List[Task], max_running: int,
-             workdir: str):
-    _running = []
-    done = []
-    for task in running:
-        task.poll()
+                # Replace by pending task
+                if pending:
+                    task = pending.pop(0)
+                    task.start(dir=workdir)
+                    tmp_running.append(task)
 
-        if task.running():
-            _running.append(task)
-        else:  # Assume 'done'
-            done.append(task)
-
-    running = _running
-    while len(running) < max_running:
-        try:
+        running = tmp_running
+        while pending and len(running) < max_running:
             task = pending.pop(0)
-        except IndexError:
-            break
-        else:
             task.start(dir=workdir)
             running.append(task)
 
-    return pending, running, done
+        sys.stderr.write(f"OBS--: secs: {time.time() - ts:.0f}, run: {len(running)}, pend: {len(pending)}\n")
+        sys.stderr.flush()
+
+        if action == _PING_REQ:
+            main_res.put(_OVER_RES)
+        elif notify_when_done and not pending and not running:
+            # No more running/waiting tasks
+            main_res.put(_OVER_RES)
+            notify_when_done = False
+
+    for _ in range(num_observers):
+        obs_res.put(None)
+
+    main_res.put(_OVER_RES)
 
 
 class Pool:
-    def __init__(self, path: str, max_workers: int):
+    def __init__(self, path: str, max_running: int, threads: int = 4):
         self._dir = path
-        self._max_workers = max_workers
-        self._queue_in = Queue()
-        self._queue_out = Queue()
+        self._max_running = max_running
 
-        self._t = threading.Thread(target=_manager,
-                                   args=(self._queue_in, self._queue_out,
-                                         self._max_workers, self._dir))
-        self._t.start()
+        self._main_req = Queue()
+        self._main_res = Queue()
+        self._obs_req = Queue()
+        self._obs_res = Queue()
+
+        self._observers = []
+        for _ in range(max(1, threads - 1)):
+            t = Thread(target=_observer,
+                       args=(self._obs_req, self._obs_res))
+            t.start()
+            self._observers.append(t)
+
+        self._manager = Thread(target=_manager,
+                               args=(self._main_req, self._main_res,
+                                     self._obs_req, self._obs_res,
+                                     len(self._observers), self._max_running,
+                                     self._dir))
+        self._manager.start()
 
     def __enter__(self):
         return self
@@ -104,21 +130,21 @@ class Pool:
             pass
 
     def submit(self, task: Task):
-        self._queue_in.put((_TASK_REQ, task))
+        self._main_req.put((_TASK_REQ, task))
 
     def as_completed(self, wait: bool = False):
         if wait:
-            self._queue_in.put((_WAIT_REQ, None))
+            self._main_req.put((_WAIT_REQ, None))
         else:
-            self._queue_in.put((_PING_REQ, None))
+            self._main_req.put((_PING_REQ, None))
 
-        for task in iter(self._queue_out.get, _OVER_RES):
+        for task in iter(self._main_res.get, _OVER_RES):
             yield task
 
     def terminate(self):
-        if self._queue_in is not None:
-            self._queue_in.put((_KILL_REQ, None))
-            self._queue_in = None
+        if self._main_req is not None:
+            self._main_req.put((_KILL_REQ, None))
+            self._main_req = None
 
-            for _ in iter(self._queue_out.get, _OVER_RES):
+            for _ in iter(self._main_res.get, _OVER_RES):
                 pass
