@@ -78,7 +78,7 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
             notify_when_done = False
 
     for _ in range(num_workers):
-        sec_res.put(None)
+        sec_req.put(None)
 
     main_res.put(_OVER_RES)
 
