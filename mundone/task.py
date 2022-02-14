@@ -218,7 +218,7 @@ class Task:
             if isinstance(mem, (float, int)):
                 cmd += [
                     "-M", f"{mem:.0f}M",
-                    "-R", f"select[mem>{mem:.0f}M]",
+                    "-R", f"select[mem>={mem:.0f}M]",
                     "-R", f"rusage[mem={mem:.0f}M]"
                 ]
 
@@ -226,7 +226,7 @@ class Task:
                 tmp = self.scheduler.get(key)
                 if isinstance(tmp, (float, int)):
                     cmd += [
-                        "-R", f"select[{key}>{tmp:.0f}M]",
+                        "-R", f"select[{key}>={tmp:.0f}M]",
                         "-R", f"rusage[{key}={tmp:.0f}M]"
                     ]
 
@@ -338,15 +338,17 @@ class Task:
             fh_err.close()
             self.file_handlers = None
 
-        with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
-            self.stdout = fh.read()
+        try:
+            with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
+                self.stdout = fh.read()
+        except FileNotFoundError:
+            self.stdout = ""
 
-        with open(os.path.join(self.workdir, ERROR_FILE), "rt") as fh:
-            self.stderr = fh.read()
-
-        os.unlink(os.path.join(self.workdir, INPUT_FILE))
-        os.unlink(os.path.join(self.workdir, OUTPUT_FILE))
-        os.unlink(os.path.join(self.workdir, ERROR_FILE))
+        try:
+            with open(os.path.join(self.workdir, ERROR_FILE), "rt") as fh:
+                self.stderr = fh.read()
+        except FileNotFoundError:
+            self.stderr = ""
 
         returncode = None
         try:
@@ -361,14 +363,25 @@ class Task:
             self.status = STATUS_ERROR
             self.end_time = datetime.now()
         else:
-            os.unlink(os.path.join(self.workdir, RESULT_FILE))
             self.result = res[0]
             returncode = res[1]
             self.start_time = res[2]
             self.end_time = res[3]
-        finally:
-            shutil.rmtree(self.workdir)
-            return returncode
+
+        n_attempts = 0
+        while True:
+            n_attempts += 1
+            try:
+                shutil.rmtree(self.workdir)
+            except OSError:
+                if n_attempts == 5:
+                    raise
+                else:
+                    time.sleep(30)
+            else:
+                break
+
+        return returncode
 
     def terminate(self, force: bool = False):
         if self.done():
