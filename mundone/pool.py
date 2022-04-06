@@ -1,7 +1,7 @@
 from threading import Thread
 from queue import Queue, Empty
 
-from .task import Task, STATUS_RUNNING
+from .task import Task
 
 _TASK_REQ = "--task--"
 _PING_REQ = "--ping--"
@@ -28,7 +28,7 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
             action = task = None
 
         if action == _TASK_REQ:
-            if task.status == STATUS_RUNNING:
+            if task.running():
                 # Passed task is already running
                 running.append(task)
             elif len(running) < max_running:
