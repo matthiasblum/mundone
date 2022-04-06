@@ -279,13 +279,14 @@ class Task:
                 else:
                     self.status = STATUS_ERROR
         elif self.jobid is not None:
-            cmd = ["bjobs", str(self.jobid)]
+            cmd = ["bjobs", "-w", str(self.jobid)]
             outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
             outs = outs.strip().decode()
 
             try:
                 status = outs.splitlines()[1].split()[2]
-            except IndexError:
+            except IndexError as exc:
+                sys.stderr.write(f"IndexError: {exc}: {outs}\n")
                 return
 
             if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
@@ -312,7 +313,8 @@ class Task:
             elif status == "ZOMBI":
                 self.terminate(force=True)
 
-        elif self.workdir and os.path.isfile(os.path.join(self.workdir, RESULT_FILE)):
+        elif self.workdir and os.path.isfile(os.path.join(self.workdir,
+                                                          RESULT_FILE)):
             returncode = self._collect()
             if returncode == 0:
                 self.status = STATUS_SUCCESS
