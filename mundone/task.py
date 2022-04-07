@@ -279,7 +279,7 @@ class Task:
                 else:
                     self.status = STATUS_ERROR
         elif self.jobid is not None:
-            cmd = ["bjobs", str(self.jobid)]
+            cmd = ["bjobs", "-w", str(self.jobid)]
             outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
             outs = outs.strip().decode()
 
