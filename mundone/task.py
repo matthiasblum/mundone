@@ -242,7 +242,11 @@ class Task:
             outs = outs.strip().decode()
 
             # Expected: Job <job_id> is submitted to [default ]queue <queue>.
-            self.jobid = int(outs.split('<')[1].split('>')[0])
+            try:
+                self.jobid = int(outs.split('<')[1].split('>')[0])
+            except IndexError as exc:
+                sys.stderr.write(f"{exc}: {outs}\n{errs}\n")
+                return
         else:
             cmd = [
                 sys.executable,
