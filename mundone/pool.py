@@ -28,7 +28,13 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
             action = task = None
 
         if action == _TASK_REQ:
-            if len(running) < max_running:
+            if task.running():
+                # Passed task is already running
+                running.append(task)
+            elif task.done():
+                # Passed task is already done: send it back
+                main_res.put(task)
+            elif len(running) < max_running:
                 # Pool not full: start task right away
                 task.start(dir=workdir)
                 running.append(task)
