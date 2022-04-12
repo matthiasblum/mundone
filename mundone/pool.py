@@ -90,9 +90,11 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
 
 
 class Pool:
-    def __init__(self, path: str, max_running: int, threads: int = 4):
+    def __init__(self, path: str, max_running: int, kill_on_exit: bool = True,
+                 threads: int = 4):
         self._dir = path
         self._max_running = max_running
+        self._kill_on_exit = kill_on_exit
 
         self._main_req = Queue()
         self._main_res = Queue()
@@ -117,13 +119,15 @@ class Pool:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.terminate()
+        if self._kill_on_exit:
+            self.terminate()
 
     def __del__(self):
-        try:
-            self.terminate()
-        except Exception:
-            pass
+        if self._kill_on_exit:
+            try:
+                self.terminate()
+            except Exception:
+                pass
 
     def submit(self, task: Task):
         self._main_req.put((_TASK_REQ, task))
