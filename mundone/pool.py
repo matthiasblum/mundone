@@ -7,6 +7,7 @@ _TASK_REQ = "--task--"
 _PING_REQ = "--ping--"
 _WAIT_REQ = "--wait--"
 _KILL_REQ = "--kill--"
+_STOP_REQ = "--stop--"
 _OVER_RES = "--over--"
 
 
@@ -45,6 +46,8 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
             continue
         elif action == _WAIT_REQ:
             notify_when_done = True
+        elif action == _STOP_REQ:
+            break
         elif action == _KILL_REQ:
             for task in running + pending:
                 task.terminate()
@@ -119,15 +122,13 @@ class Pool:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if self._kill_on_exit:
-            self.terminate()
+        self.terminate()
 
     def __del__(self):
-        if self._kill_on_exit:
-            try:
-                self.terminate()
-            except Exception:
-                pass
+        try:
+            self.terminate()
+        except Exception:
+            pass
 
     def submit(self, task: Task):
         self._main_req.put((_TASK_REQ, task))
@@ -142,9 +143,15 @@ class Pool:
             yield task
 
     def terminate(self):
-        if self._main_req is not None:
-            self._main_req.put((_KILL_REQ, None))
-            self._main_req = None
+        if self._main_req is None:
+            return
 
-            for _ in iter(self._main_res.get, _OVER_RES):
-                pass
+        if self._kill_on_exit:
+            self._main_req.put((_KILL_REQ, None))
+        else:
+            self._main_req.put((_STOP_REQ, None))
+
+        self._main_req = None
+
+        for _ in iter(self._main_res.get, _OVER_RES):
+            pass
