@@ -1,4 +1,4 @@
-__version_info__ = (0, 4, 13)
+__version_info__ = (0, 4, 14)
 __version__ = '.'.join(map(str, __version_info__))
 
 from .pool import Pool
