@@ -245,7 +245,7 @@ class Task:
             try:
                 self.jobid = int(outs.split('<')[1].split('>')[0])
             except IndexError as exc:
-                sys.stderr.write(f"IndexError/start: {exc}: {outs}, {errs}\n")
+                sys.stderr.write(f"IndexError/start: {exc}: {outs}\n")
                 return
         else:
             cmd = [
@@ -289,8 +289,7 @@ class Task:
 
             try:
                 status = outs.splitlines()[1].split()[2]
-            except IndexError as exc:
-                sys.stderr.write(f"IndexError/poll: {exc}: {outs}, {errs}\n")
+            except IndexError:
                 return
 
             if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
