@@ -284,45 +284,57 @@ class Task:
                     self.status = STATUS_ERROR
         elif self.jobid is not None:
             cmd = ["bjobs", "-w", str(self.jobid)]
-            outs, errs = Popen(cmd, stdout=PIPE, stderr=DEVNULL).communicate()
+            outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
             outs = outs.strip().decode()
+            errs = errs.strip().decode()
 
-            try:
-                status = outs.splitlines()[1].split()[2]
-            except IndexError:
-                return
+            if outs:
+                try:
+                    status = outs.splitlines()[1].split()[2]
+                except IndexError:
+                    return
 
-            if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
-                returncode = self._collect()
-                self.jobid = None
-                if self.trust_scheduler:
-                    if status == "DONE":
+                if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
+                    returncode = self._collect()
+                    self.jobid = None
+                    if self.trust_scheduler:
+                        if status == "DONE":
+                            self.status = STATUS_SUCCESS
+                        else:
+                            self.status = STATUS_ERROR
+                    elif returncode == 0:
                         self.status = STATUS_SUCCESS
                     else:
                         self.status = STATUS_ERROR
-                elif returncode == 0:
-                    self.status = STATUS_SUCCESS
-                else:
-                    self.status = STATUS_ERROR
-            elif status == "RUN":
-                # Reset unknown status timer
-                self.unknown_start = None
-            elif status == "UNKWN":
-                now = datetime.now()
-                if self.unknown_start is None:
-                    self.unknown_start = now
-                elif (now - self.unknown_start).total_seconds() >= 3600:
+                elif status == "RUN":
+                    # Reset unknown status timer
+                    self.unknown_start = None
+                elif status == "UNKWN":
+                    now = datetime.now()
+                    if self.unknown_start is None:
+                        self.unknown_start = now
+                    elif (now - self.unknown_start).total_seconds() >= 3600:
+                        self.terminate(force=True)
+                elif status == "ZOMBI":
                     self.terminate(force=True)
-            elif status == "ZOMBI":
-                self.terminate(force=True)
+            elif errs == f"Job <{self.jobid}> is not found":
+                if not self._try_collect():
+                    # Job does not exist and results not found: error
+                    self.status = STATUS_ERROR
+        else:
+            self._try_collect()
 
-        elif self.workdir and os.path.isfile(os.path.join(self.workdir,
-                                                          RESULT_FILE)):
+    def _try_collect(self) -> bool:
+        if self.workdir and os.path.isfile(os.path.join(self.workdir,
+                                                        RESULT_FILE)):
             returncode = self._collect()
             if returncode == 0:
                 self.status = STATUS_SUCCESS
             else:
                 self.status = STATUS_ERROR
+            return True
+
+        return False
 
     def _lsf_stdout_ready(self) -> bool:
         try:
