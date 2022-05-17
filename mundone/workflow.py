@@ -553,6 +553,15 @@ class Workflow:
             return date_string
 
 
+def get_lsf_max_memory(stdout: str) -> int:
+    match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
+    if match:
+        group = match.group(1)
+        return 0 if group == "-" else int(group.split()[0])
+
+    return -1
+
+
 def query_db():
     parser = argparse.ArgumentParser(description="Mundone SQLite database "
                                                  "utility")
@@ -562,6 +571,8 @@ def query_db():
                         help="list all tasks, not only 'active' ones")
     parser.add_argument("--done", action="store_true",
                         help="list successful tasks only")
+    parser.add_argument("--lsf-memory", action="store_true",
+                        help="show the memory used by tasks run on LSF")
     args = parser.parse_args()
 
     if not os.path.isfile(args.db):
@@ -588,14 +599,14 @@ def query_db():
         else:
             cur.execute(
                 """
-                SELECT name, submit_time, end_time, status, active 
+                SELECT name, submit_time, end_time, status, active, stdout
                 FROM task 
                 WHERE submit_time is not NULL 
                 ORDER BY submit_time, start_time, end_time
                 """
             )
 
-            for name, start, end, status, active in cur:
+            for name, start, end, status, active, stdout in cur:
                 if not active and not args.all:
                     continue
                 elif status is None:
@@ -612,8 +623,17 @@ def query_db():
                 if status != 'done' and args.done:
                     continue
 
+                if args.lsf_memory:
+                    max_mem = get_lsf_max_memory(stdout)
+                    if max_mem >= 0:
+                        mem = f"{max_mem:>10}"
+                    else:
+                        mem = f"{'?':>10}"
+                else:
+                    mem = ""
+
                 print(f"{name:<30}    {start or '':<20}    "
-                      f"{end or '':<20}    {status}")
+                      f"{end or '':<20}    {status}{mem}")
     finally:
         cur.close()
         con.close()
