@@ -372,26 +372,30 @@ class Workflow:
             running = _running
 
             for name in pending:
-                pending_parents = []
+                running_parents = failed_parents = 0
                 for parent in child2parents[name]:
                     if parent in failed:
-                        # Cancel child
-                        task = self.tasks[name]
-                        task.terminate()
-                        self.persist_task(task, add_new=False)
-                        failed.append(name)
-                        logger.error(f"{name:<40} cancelled")
-                        break
+                        failed_parents += 1
                     elif parent not in completed:
-                        pending_parents.append(parent)
-                else:
-                    if not pending_parents:
-                        task = self.tasks[name]
+                        # pending or running
+                        running_parents += 1
+
+                if running_parents == 0:
+                    # No more pending/running parents
+
+                    task = self.tasks[name]
+                    if failed_parents == 0:
                         task.start(dir=self.dir)
                         self.persist_task(task, add_new=False)
                         running[name] = task
                         attempts[name] += 1
                         logger.info(f"{name:<40} running")
+                    else:
+                        # At least one failed parent: cancel child task
+                        task.terminate()
+                        self.persist_task(task, add_new=False)
+                        failed.append(name)
+                        logger.error(f"{name:<40} cancelled")
 
             pending -= set(running) | set(failed)
             self.get_tasks(exclude=running, update=False)
