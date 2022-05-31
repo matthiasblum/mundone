@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import sys
@@ -371,26 +372,30 @@ class Workflow:
             running = _running
 
             for name in pending:
-                pending_parents = []
+                running_parents = failed_parents = 0
                 for parent in child2parents[name]:
                     if parent in failed:
-                        # Cancel child
-                        task = self.tasks[name]
-                        task.terminate()
-                        self.persist_task(task, add_new=False)
-                        failed.append(name)
-                        logger.error(f"{name:<40} cancelled")
-                        break
+                        failed_parents += 1
                     elif parent not in completed:
-                        pending_parents.append(parent)
-                else:
-                    if not pending_parents:
-                        task = self.tasks[name]
+                        # pending or running
+                        running_parents += 1
+
+                if running_parents == 0:
+                    # No more pending/running parents
+
+                    task = self.tasks[name]
+                    if failed_parents == 0:
                         task.start(dir=self.dir)
                         self.persist_task(task, add_new=False)
                         running[name] = task
                         attempts[name] += 1
                         logger.info(f"{name:<40} running")
+                    else:
+                        # At least one failed parent: cancel child task
+                        task.terminate()
+                        self.persist_task(task, add_new=False)
+                        failed.append(name)
+                        logger.error(f"{name:<40} cancelled")
 
             pending -= set(running) | set(failed)
             self.get_tasks(exclude=running, update=False)
@@ -553,6 +558,15 @@ class Workflow:
             return date_string
 
 
+def get_lsf_max_memory(stdout: str) -> int:
+    match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
+    if match:
+        group = match.group(1)
+        return 0 if group == "-" else int(group.split()[0])
+
+    return -1
+
+
 def query_db():
     parser = argparse.ArgumentParser(description="Mundone SQLite database "
                                                  "utility")
@@ -562,6 +576,8 @@ def query_db():
                         help="list all tasks, not only 'active' ones")
     parser.add_argument("--done", action="store_true",
                         help="list successful tasks only")
+    parser.add_argument("--lsf-memory", action="store_true",
+                        help="show the memory used by tasks run on LSF")
     args = parser.parse_args()
 
     if not os.path.isfile(args.db):
@@ -588,14 +604,14 @@ def query_db():
         else:
             cur.execute(
                 """
-                SELECT name, submit_time, end_time, status, active 
+                SELECT name, submit_time, end_time, status, active, stdout
                 FROM task 
                 WHERE submit_time is not NULL 
                 ORDER BY submit_time, start_time, end_time
                 """
             )
 
-            for name, start, end, status, active in cur:
+            for name, start, end, status, active, stdout in cur:
                 if not active and not args.all:
                     continue
                 elif status is None:
@@ -612,8 +628,17 @@ def query_db():
                 if status != 'done' and args.done:
                     continue
 
+                if args.lsf_memory:
+                    max_mem = get_lsf_max_memory(stdout)
+                    if max_mem >= 0:
+                        mem = f"{max_mem:>10}"
+                    else:
+                        mem = f"{'?':>10}"
+                else:
+                    mem = ""
+
                 print(f"{name:<30}    {start or '':<20}    "
-                      f"{end or '':<20}    {status}")
+                      f"{end or '':<20}    {status}{mem}")
     finally:
         cur.close()
         con.close()
