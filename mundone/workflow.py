@@ -637,7 +637,7 @@ def query_db():
                 else:
                     mem = ""
 
-                print(f"{name:<30}    {start or '':<20}    "
+                print(f"{name:<50}    {start or '':<20}    "
                       f"{end or '':<20}    {status}{mem}")
     finally:
         cur.close()
