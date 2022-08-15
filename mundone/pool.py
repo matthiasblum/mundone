@@ -37,8 +37,10 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
                 main_res.put(task)
             elif len(running) < max_running:
                 # Pool not full: start task right away
-                task.start(dir=workdir)
-                running.append(task)
+                if task.start(dir=workdir):
+                    running.append(task)
+                else:
+                    pending.append(task)
             else:
                 # Pool full: task needs to wait
                 pending.append(task)
@@ -70,14 +72,19 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
                 # Replace by pending task
                 if pending:
                     task = pending.pop(0)
-                    task.start(dir=workdir)
-                    tmp_running.append(task)
+                    if task.start(dir=workdir):
+                        tmp_running.append(task)
+                    else:
+                        pending.append(task)
 
         running = tmp_running
         while pending and len(running) < max_running:
             task = pending.pop(0)
-            task.start(dir=workdir)
-            running.append(task)
+            if task.start(dir=workdir):
+                running.append(task)
+            else:
+                pending.append(task)
+                break
 
         if action == _PING_REQ:
             main_res.put(_OVER_RES)

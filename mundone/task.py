@@ -186,12 +186,12 @@ class Task:
     def done(self) -> bool:
         return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
 
-    def start(self, **kwargs):
+    def start(self, **kwargs) -> bool:
         workdir = kwargs.get("dir", os.getcwd())
         trust_scheduler = kwargs.get("trust_scheduler", True)
 
         if self.running() or not self.ready():
-            return
+            return True
 
         self._pack(workdir)
         output_file = os.path.join(self.workdir, OUTPUT_FILE)
@@ -246,7 +246,8 @@ class Task:
                 self.jobid = int(outs.split('<')[1].split('>')[0])
             except IndexError as exc:
                 sys.stderr.write(f"IndexError/start: {exc}: {outs}\n")
-                return
+                time.sleep(3)
+                return False
         else:
             cmd = [
                 sys.executable,
@@ -263,6 +264,7 @@ class Task:
         self.status = STATUS_RUNNING  # actually not running: submitted
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
+        return True
 
     def wait(self, seconds: int = 10):
         while not self.done():
