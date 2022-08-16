@@ -135,6 +135,12 @@ class Task:
         except FileExistsError:
             pass
 
+        for file in [OUTPUT_FILE, ERROR_FILE, INPUT_FILE, RESULT_FILE]:
+            try:
+                os.unlink(os.path.join(self.workdir, file))
+            except FileNotFoundError:
+                pass
+
         with open(os.path.join(self.workdir, INPUT_FILE), "wb") as fh:
             module = inspect.getmodule(self.fn)
             module_path = module.__file__
@@ -245,7 +251,8 @@ class Task:
             try:
                 self.jobid = int(outs.split('<')[1].split('>')[0])
             except IndexError as exc:
-                sys.stderr.write(f"IndexError/start: {exc}: {outs}\n")
+                sys.stderr.write(f"IndexError/start: {exc}: "
+                                 f"{outs.rstrip()} - {errs.rstrip()}\n")
                 time.sleep(3)
                 return False
         else:
@@ -265,6 +272,20 @@ class Task:
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
         return True
+
+    def _clean(self, seconds: int = 30, max_attempts: int = 5):
+        num_attempts = 0
+        while True:
+            num_attempts += 1
+            try:
+                shutil.rmtree(self.workdir)
+            except OSError:
+                if num_attempts == max_attempts:
+                    raise
+                else:
+                    time.sleep(seconds)
+            else:
+                break
 
     def wait(self, seconds: int = 10):
         while not self.done():
@@ -387,19 +408,7 @@ class Task:
             self.start_time = res[2]
             self.end_time = res[3]
 
-        n_attempts = 0
-        while True:
-            n_attempts += 1
-            try:
-                shutil.rmtree(self.workdir)
-            except OSError:
-                if n_attempts == 5:
-                    raise
-                else:
-                    time.sleep(30)
-            else:
-                break
-
+        self._clean()
         return returncode
 
     def terminate(self, force: bool = False):

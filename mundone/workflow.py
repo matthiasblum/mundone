@@ -334,11 +334,11 @@ class Workflow:
         for name in pending:
             if all([parent not in pending for parent in child2parents[name]]):
                 task = self.tasks[name]
-                task.start(dir=self.dir)
-                self.persist_task(task, add_new=False)
-                running[name] = task
-                attempts[name] += 1
-                logger.info(f"{name:<40} running")
+                if task.start(dir=self.dir):
+                    self.update_task(task)
+                    running[name] = task
+                    attempts[name] += 1
+                    logger.info(f"{name:<40} running")
 
         pending -= set(running)
         completed = set()
@@ -353,21 +353,27 @@ class Workflow:
                 elif task.completed():
                     logger.info(f"{name:<40} done")
                     completed.add(name)
-                    self.persist_task(task, add_new=False)
+                    self.update_task(task)
                 elif attempts[name] <= max_retries:
-                    logger.error(f"{name:<40} failed: retry")
-                    self.persist_task(task, add_new=True)
-                    task.start(dir=self.dir)
-                    self.persist_task(task, add_new=False)
-                    attempts[name] += 1
+                    self.update_task(task, active=True)
+
+                    if task.start(dir=self.dir):
+                        self.update_task(task, active=False)
+                        self.insert_task(task)
+                        logger.error(f"{name:<40} failed: retry")
+                        attempts[name] += 1
+                    else:
+                        # Failed to start: back to pending
+                        pending.add(name)
                 else:
                     logger.error(f"{name:<40} failed")
                     failed.append(name)
-                    self.persist_task(task, add_new=False)
+                    self.update_task(task, active=True)
 
             _running = {}
             for name, task in running.items():
-                if name not in completed and name not in failed:
+                if (name not in pending and name not in pending
+                        and name not in failed):
                     _running[name] = task
             running = _running
 
@@ -386,14 +392,14 @@ class Workflow:
                     task = self.tasks[name]
                     if failed_parents == 0:
                         task.start(dir=self.dir)
-                        self.persist_task(task, add_new=False)
+                        self.update_task(task, active=True)
                         running[name] = task
                         attempts[name] += 1
                         logger.info(f"{name:<40} running")
                     else:
                         # At least one failed parent: cancel child task
                         task.terminate()
-                        self.persist_task(task, add_new=False)
+                        self.update_task(task, active=True)
                         failed.append(name)
                         logger.error(f"{name:<40} cancelled")
 
@@ -425,14 +431,18 @@ class Workflow:
 
         return success
 
-    def persist_task(self, task: Task, add_new: bool):
-        """
+    def insert_task(self, task: Task):
+        con = sqlite3.connect(self.database)
+        con.execute(
+            """
+            INSERT INTO task (name, wid, result, create_time)
+            VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
+            """, (task.name, self.id, json.dumps(None))
+        )
+        con.commit()
+        con.close()
 
-        Args:
-            task:
-            add_new:
-
-        """
+    def update_task(self, task: Task, active: bool = True):
         con = sqlite3.connect(self.database)
         con.execute(
             """
@@ -446,18 +456,9 @@ class Workflow:
                 task.status, task.workdir, json.dumps(task.result),
                 task.stdout, task.stderr, self.strftime(task.submit_time),
                 self.strftime(task.start_time), self.strftime(task.end_time),
-                0 if add_new else 1, task.name, self.id
+                1 if active else 0, task.name, self.id
             )
         )
-
-        if add_new:
-            con.execute(
-                """
-                INSERT INTO task (name, wid, result, create_time)
-                VALUES (?, ?, ?, strftime("%Y-%m-%d %H:%M:%S"))
-                """, (task.name, self.id, json.dumps(None))
-            )
-
         con.commit()
         con.close()
 
@@ -476,7 +477,7 @@ class Workflow:
             for task_name, task in to_kill:
                 logging.info(f"\t- {task_name}")
                 task.terminate()
-                self.persist_task(task, add_new=False)
+                self.update_task(task)
 
         self.running = False
 
