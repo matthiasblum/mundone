@@ -372,7 +372,7 @@ class Workflow:
 
             _running = {}
             for name, task in running.items():
-                if (name not in pending and name not in pending
+                if (name not in pending and name not in completed
                         and name not in failed):
                     _running[name] = task
             running = _running
