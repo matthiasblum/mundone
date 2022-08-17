@@ -244,7 +244,7 @@ class Task:
                 result_file
             ]
 
-            outs, errs = Popen(cmd, stdout=PIPE).communicate()
+            outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
             outs = outs.strip().decode()
 
             # Expected: Job <job_id> is submitted to [default ]queue <queue>.
