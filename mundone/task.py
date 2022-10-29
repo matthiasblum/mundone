@@ -5,17 +5,12 @@ import shutil
 import sys
 import time
 from datetime import datetime
-from subprocess import Popen, PIPE, DEVNULL
+from subprocess import Popen
 from tempfile import mkdtemp
 from typing import Callable, Optional, Sequence
 
-from . import runner
+from . import lsf, runner, statuses
 
-STATUS_PENDING = None
-STATUS_RUNNING = 1
-STATUS_SUCCESS = 0
-STATUS_ERROR = 2
-STATUS_CANCELLED = 3
 
 INPUT_FILE = "input.pickle"
 OUTPUT_FILE = "output.log"
@@ -38,7 +33,7 @@ class Task:
         self.kwargs = kwargs if kwargs is not None else {}
 
         self.name = str(_kwargs.get("name", fn.__name__))
-        self.status = STATUS_PENDING
+        self.status = statuses.STATUS_PENDING
         self.workdir = None
 
         # Local process
@@ -112,15 +107,15 @@ class Task:
 
     @property
     def state(self) -> str:
-        if self.status == STATUS_PENDING:
+        if self.status == statuses.STATUS_PENDING:
             return "pending"
-        elif self.status == STATUS_RUNNING:
+        elif self.status == statuses.STATUS_RUNNING:
             return "running"
-        elif self.status == STATUS_ERROR:
+        elif self.status == statuses.STATUS_ERROR:
             return "failed"
-        elif self.status == STATUS_CANCELLED:
+        elif self.status == statuses.STATUS_CANCELLED:
             return "cancelled"
-        elif self.status == STATUS_SUCCESS:
+        elif self.status == statuses.STATUS_SUCCESS:
             return "done"
 
     def _pack(self, workdir: str):
@@ -184,13 +179,13 @@ class Task:
         return True
 
     def running(self) -> bool:
-        return self.status == STATUS_RUNNING
+        return self.status == statuses.STATUS_RUNNING
 
     def completed(self) -> bool:
-        return self.status == STATUS_SUCCESS
+        return self.status == statuses.STATUS_SUCCESS
 
     def done(self) -> bool:
-        return self.status in (STATUS_SUCCESS, STATUS_ERROR, STATUS_CANCELLED)
+        return self.status in (statuses.STATUS_SUCCESS, statuses.STATUS_ERROR, statuses.STATUS_CANCELLED)
 
     def start(self, **kwargs) -> bool:
         workdir = kwargs.get("dir", os.getcwd())
@@ -208,53 +203,23 @@ class Task:
         self.proc = self.jobid = self.file_handlers = None
 
         if isinstance(self.scheduler, dict):
-            cmd = ["bsub", "-J", self.name]
+            job_id = lsf.submit(name=self.name,
+                                in_file=input_file,
+                                out_file=result_file,
+                                stdout_file=output_file,
+                                stderr_file=error_file,
+                                queue=self.scheduler.get("queue"),
+                                project=self.scheduler.get("project"),
+                                cpu=self.scheduler.get("cpu"),
+                                mem=self.scheduler.get("mem"),
+                                tmp=self.scheduler.get("tmp"),
+                                scratch=self.scheduler.get("scratch"))
 
-            if isinstance(self.scheduler.get("queue"), str):
-                cmd += ["-q", self.scheduler["queue"]]
-
-            if isinstance(self.scheduler.get("project"), str):
-                cmd += ["-P", self.scheduler["project"]]
-
-            num_cpus = self.scheduler.get("cpu")
-            if isinstance(num_cpus, int) and num_cpus > 1:
-                cmd += ["-n", str(num_cpus), "-R", "span[hosts=1]"]
-
-            mem = self.scheduler.get("mem")
-            if isinstance(mem, (float, int)):
-                cmd += [
-                    "-M", f"{mem:.0f}M",
-                    "-R", f"select[mem>={mem:.0f}M]",
-                    "-R", f"rusage[mem={mem:.0f}M]"
-                ]
-
-            for key in ["tmp", "scratch"]:
-                tmp = self.scheduler.get(key)
-                if isinstance(tmp, (float, int)):
-                    cmd += [
-                        "-R", f"select[{key}>={tmp:.0f}M]",
-                        "-R", f"rusage[{key}={tmp:.0f}M]"
-                    ]
-
-            cmd += ["-o", output_file, "-e", error_file]
-            cmd += [
-                sys.executable,
-                os.path.realpath(runner.__file__),
-                input_file,
-                result_file
-            ]
-
-            outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
-            outs = outs.strip().decode()
-
-            # Expected: Job <job_id> is submitted to [default ]queue <queue>.
-            try:
-                self.jobid = int(outs.split('<')[1].split('>')[0])
-            except IndexError as exc:
-                sys.stderr.write(f"IndexError/start: {exc}: "
-                                 f"{outs.rstrip()} - {errs.rstrip()}\n")
+            if job_id is None:
                 time.sleep(3)
                 return False
+
+            self.jobid = job_id
         else:
             cmd = [
                 sys.executable,
@@ -268,7 +233,7 @@ class Task:
             self.proc = Popen(cmd, stdout=fh_out, stderr=fh_err)
             self.file_handlers = (fh_out, fh_err)
 
-        self.status = STATUS_RUNNING  # actually not running: submitted
+        self.status = statuses.STATUS_RUNNING  # actually not running: submitted
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
         return True
@@ -293,7 +258,7 @@ class Task:
             time.sleep(seconds)
 
     def poll(self):
-        if self.status != STATUS_RUNNING:
+        if self.status != statuses.STATUS_RUNNING:
             return
 
         if self.proc is not None:
@@ -302,48 +267,43 @@ class Task:
                 self._collect()
                 self.proc = None
                 if returncode == 0:
-                    self.status = STATUS_SUCCESS
+                    self.status = statuses.STATUS_SUCCESS
                 else:
-                    self.status = STATUS_ERROR
+                    self.status = statuses.STATUS_ERROR
         elif self.jobid is not None:
-            cmd = ["bjobs", "-w", str(self.jobid)]
-            outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
-            outs = outs.strip().decode()
-            errs = errs.strip().decode()
+            found, status = lsf.check(self.jobid)
 
-            if outs:
-                try:
-                    status = outs.splitlines()[1].split()[2]
-                except IndexError:
-                    return
-
-                if status in ("DONE", "EXIT") and self._lsf_stdout_ready():
+            if found:
+                ok_or_err = [statuses.STATUS_SUCCESS, statuses.STATUS_ERROR]
+                file = os.path.join(self.workdir, OUTPUT_FILE)
+                if status in ok_or_err and lsf.ready_to_collect(file):
                     returncode = self._collect()
                     self.jobid = None
+
                     if self.trust_scheduler:
-                        if status == "DONE":
-                            self.status = STATUS_SUCCESS
+                        if status == statuses.STATUS_SUCCESS:
+                            self.status = statuses.STATUS_SUCCESS
                         else:
-                            self.status = STATUS_ERROR
+                            self.status = statuses.STATUS_ERROR
                     elif returncode == 0:
-                        self.status = STATUS_SUCCESS
+                        self.status = statuses.STATUS_SUCCESS
                     else:
-                        self.status = STATUS_ERROR
-                elif status == "RUN":
+                        self.status = statuses.STATUS_ERROR
+                elif status == statuses.STATUS_RUNNING:
                     # Reset unknown status timer
                     self.unknown_start = None
-                elif status == "UNKWN":
+                elif status == statuses.STATUS_UNKNOWN:
                     now = datetime.now()
                     if self.unknown_start is None:
                         self.unknown_start = now
                     elif (now - self.unknown_start).total_seconds() >= 3600:
                         self.terminate(force=True)
-                elif status == "ZOMBI":
+                elif status == statuses.STATUS_ZOMBIE:
                     self.terminate(force=True)
-            elif errs == f"Job <{self.jobid}> is not found":
+            else:
                 if not self._try_collect():
                     # Job does not exist and results not found: error
-                    self.status = STATUS_ERROR
+                    self.status = statuses.STATUS_ERROR
         else:
             self._try_collect()
 
@@ -352,19 +312,12 @@ class Task:
                                                         RESULT_FILE)):
             returncode = self._collect()
             if returncode == 0:
-                self.status = STATUS_SUCCESS
+                self.status = statuses.STATUS_SUCCESS
             else:
-                self.status = STATUS_ERROR
+                self.status = statuses.STATUS_ERROR
             return True
 
         return False
-
-    def _lsf_stdout_ready(self) -> bool:
-        try:
-            with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
-                return "Resource usage summary:" in fh.read()
-        except FileNotFoundError:
-            return False
 
     def _collect(self) -> Optional[int]:
         if self.workdir is None:
@@ -400,7 +353,7 @@ class Task:
             if the task failed.
             """
             self.result = None
-            self.status = STATUS_ERROR
+            self.status = statuses.STATUS_ERROR
             self.end_time = datetime.now()
         else:
             self.result = res[0]
@@ -417,19 +370,15 @@ class Task:
         elif self.proc is not None:
             self.proc.kill()
         elif self.jobid is not None:
-            if force:
-                cmd = ["bkill", "-r", str(self.jobid)]
-            else:
-                cmd = ["bkill", str(self.jobid)]
+            lsf.kill(self.jobid, force=force)
 
-            Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
-
-            while not self._lsf_stdout_ready():
+            file = os.path.join(self.workdir, OUTPUT_FILE)
+            while not lsf.ready_to_collect(file):
                 time.sleep(1)
 
         self._collect()
         self.proc = self.jobid = None
-        self.status = STATUS_CANCELLED
+        self.status = statuses.STATUS_CANCELLED
 
 
 class TaskOutput:
