@@ -49,8 +49,8 @@ class Task:
         self.jobid = None
         self.unknown_start = None  # first time job status is UNKWN
 
-        self.stdout = None
-        self.stderr = None
+        self.stdout = ""
+        self.stderr = ""
         self.result = None
 
         self.create_time = datetime.now()
