@@ -1,13 +1,14 @@
 import os
 import re
 import sys
+from datetime import datetime
 from subprocess import Popen, DEVNULL, PIPE
 from typing import Optional
 
 from . import runner, statuses
 
 
-def ready_to_collect(file: str) -> bool:
+def is_ready_to_collect(file: str) -> bool:
     try:
         with open(file, "rt") as fh:
             return "Resource usage summary:" in fh.read()
@@ -108,3 +109,36 @@ def check(job_id: int) -> tuple[bool, Optional[str]]:
         found = False
 
     return found, status
+
+
+def get_max_memory(stdout: str) -> Optional[int]:
+    match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
+    try:
+        group = match.group(1)
+        return 0 if group == "-" else int(group.split()[0])
+    except (AttributeError, ValueError):
+        return None
+
+
+def get_cpu_time(stdout: str) -> Optional[int]:
+    match = re.search(r"^\s*CPU time :\s+(\d+)\.\d+ sec.$", stdout, re.M)
+    try:
+        return int(match.group(1))
+    except (AttributeError, ValueError):
+        return None
+
+
+def get_start_time(stdout: str) -> Optional[datetime]:
+    match = re.search(r"^Started at (.+)$", stdout, re.M)
+    try:
+        return datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+    except (AttributeError, ValueError):
+        return None
+
+
+def get_end_time(stdout: str) -> Optional[datetime]:
+    match = re.search(r"^Terminated at (.+)$", stdout, re.M)
+    try:
+        return datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+    except (AttributeError, ValueError):
+        return None
