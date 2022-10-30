@@ -118,6 +118,20 @@ class Task:
         elif self.status == statuses.STATUS_SUCCESS:
             return "done"
 
+    @property
+    def cputime(self) -> Optional[int]:
+        if isinstance(self.scheduler, dict):
+            return lsf.get_cpu_time(self.stdout)
+        else:
+            return None
+
+    @property
+    def maxmem(self) -> Optional[int]:
+        if isinstance(self.scheduler, dict):
+            return lsf.get_max_memory(self.stdout)
+        else:
+            return None
+
     def _pack(self, workdir: str):
         if self.workdir is None:
             if self.add_random_suffix:
@@ -276,7 +290,7 @@ class Task:
             if found:
                 ok_or_err = [statuses.STATUS_SUCCESS, statuses.STATUS_ERROR]
                 file = os.path.join(self.workdir, OUTPUT_FILE)
-                if status in ok_or_err and lsf.ready_to_collect(file):
+                if status in ok_or_err and lsf.is_ready_to_collect(file):
                     returncode = self._collect()
                     self.jobid = None
 
@@ -354,7 +368,12 @@ class Task:
             """
             self.result = None
             self.status = statuses.STATUS_ERROR
-            self.end_time = datetime.now()
+
+            if isinstance(self.scheduler, dict):
+                end_time = lsf.get_end_time(self.stdout)
+                self.end_time = end_time or datetime.now()
+            else:
+                self.end_time = datetime.now()
         else:
             self.result = res[0]
             returncode = res[1]
@@ -373,7 +392,7 @@ class Task:
             lsf.kill(self.jobid, force=force)
 
             file = os.path.join(self.workdir, OUTPUT_FILE)
-            while not lsf.ready_to_collect(file):
+            while not lsf.is_ready_to_collect(file):
                 time.sleep(1)
 
         self._collect()
