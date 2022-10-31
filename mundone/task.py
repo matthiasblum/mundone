@@ -370,6 +370,7 @@ class Task:
             self.status = statuses.ERROR
 
             if isinstance(self.scheduler, dict):
+                self.start_time = lsf.get_start_time(self.stdout)
                 end_time = lsf.get_end_time(self.stdout)
                 self.end_time = end_time or datetime.now()
             else:
