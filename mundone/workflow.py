@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Set
 
+from . import lsf
 from .task import Task
 
 
@@ -559,15 +560,6 @@ class Workflow:
             return date_string
 
 
-def get_lsf_max_memory(stdout: str) -> int:
-    match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
-    if match:
-        group = match.group(1)
-        return 0 if group == "-" else int(group.split()[0])
-
-    return -1
-
-
 def query_db():
     parser = argparse.ArgumentParser(description="Mundone SQLite database "
                                                  "utility")
@@ -639,11 +631,8 @@ def query_db():
                     continue
 
                 if args.lsf_memory:
-                    max_mem = get_lsf_max_memory(stdout)
-                    if max_mem >= 0:
-                        mem = f"{max_mem:>10}"
-                    else:
-                        mem = f"{'?':>10}"
+                    max_mem = lsf.get_max_memory(stdout)
+                    mem = f"{'?':>10}" if max_mem is None else f"{max_mem:>10}"
                 else:
                     mem = ""
 
