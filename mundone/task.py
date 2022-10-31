@@ -33,7 +33,7 @@ class Task:
         self.kwargs = kwargs if kwargs is not None else {}
 
         self.name = str(_kwargs.get("name", fn.__name__))
-        self.status = statuses.STATUS_PENDING
+        self.status = statuses.PENDING
         self.workdir = None
 
         # Local process
@@ -107,15 +107,15 @@ class Task:
 
     @property
     def state(self) -> str:
-        if self.status == statuses.STATUS_PENDING:
+        if self.status == statuses.PENDING:
             return "pending"
-        elif self.status == statuses.STATUS_RUNNING:
+        elif self.status == statuses.RUNNING:
             return "running"
-        elif self.status == statuses.STATUS_ERROR:
+        elif self.status == statuses.ERROR:
             return "failed"
-        elif self.status == statuses.STATUS_CANCELLED:
+        elif self.status == statuses.CANCELLED:
             return "cancelled"
-        elif self.status == statuses.STATUS_SUCCESS:
+        elif self.status == statuses.SUCCESS:
             return "done"
 
     @property
@@ -193,13 +193,13 @@ class Task:
         return True
 
     def running(self) -> bool:
-        return self.status == statuses.STATUS_RUNNING
+        return self.status == statuses.RUNNING
 
     def completed(self) -> bool:
-        return self.status == statuses.STATUS_SUCCESS
+        return self.status == statuses.SUCCESS
 
     def done(self) -> bool:
-        return self.status in (statuses.STATUS_SUCCESS, statuses.STATUS_ERROR, statuses.STATUS_CANCELLED)
+        return self.status in (statuses.SUCCESS, statuses.ERROR, statuses.CANCELLED)
 
     def start(self, **kwargs) -> bool:
         workdir = kwargs.get("dir", os.getcwd())
@@ -247,7 +247,7 @@ class Task:
             self.proc = Popen(cmd, stdout=fh_out, stderr=fh_err)
             self.file_handlers = (fh_out, fh_err)
 
-        self.status = statuses.STATUS_RUNNING  # actually not running: submitted
+        self.status = statuses.RUNNING  # actually not running: submitted
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
         return True
@@ -272,7 +272,7 @@ class Task:
             time.sleep(seconds)
 
     def poll(self):
-        if self.status != statuses.STATUS_RUNNING:
+        if self.status != statuses.RUNNING:
             return
 
         if self.proc is not None:
@@ -281,43 +281,43 @@ class Task:
                 self._collect()
                 self.proc = None
                 if returncode == 0:
-                    self.status = statuses.STATUS_SUCCESS
+                    self.status = statuses.SUCCESS
                 else:
-                    self.status = statuses.STATUS_ERROR
+                    self.status = statuses.ERROR
         elif self.jobid is not None:
             found, status = lsf.check(self.jobid)
 
             if found:
-                ok_or_err = [statuses.STATUS_SUCCESS, statuses.STATUS_ERROR]
+                ok_or_err = [statuses.SUCCESS, statuses.ERROR]
                 file = os.path.join(self.workdir, OUTPUT_FILE)
                 if status in ok_or_err and lsf.is_ready_to_collect(file):
                     returncode = self._collect()
                     self.jobid = None
 
                     if self.trust_scheduler:
-                        if status == statuses.STATUS_SUCCESS:
-                            self.status = statuses.STATUS_SUCCESS
+                        if status == statuses.SUCCESS:
+                            self.status = statuses.SUCCESS
                         else:
-                            self.status = statuses.STATUS_ERROR
+                            self.status = statuses.ERROR
                     elif returncode == 0:
-                        self.status = statuses.STATUS_SUCCESS
+                        self.status = statuses.SUCCESS
                     else:
-                        self.status = statuses.STATUS_ERROR
-                elif status == statuses.STATUS_RUNNING:
+                        self.status = statuses.ERROR
+                elif status == statuses.RUNNING:
                     # Reset unknown status timer
                     self.unknown_start = None
-                elif status == statuses.STATUS_UNKNOWN:
+                elif status == statuses.UNKNOWN:
                     now = datetime.now()
                     if self.unknown_start is None:
                         self.unknown_start = now
                     elif (now - self.unknown_start).total_seconds() >= 3600:
                         self.terminate(force=True)
-                elif status == statuses.STATUS_ZOMBIE:
+                elif status == statuses.ZOMBIE:
                     self.terminate(force=True)
             else:
                 if not self._try_collect():
                     # Job does not exist and results not found: error
-                    self.status = statuses.STATUS_ERROR
+                    self.status = statuses.ERROR
         else:
             self._try_collect()
 
@@ -326,9 +326,9 @@ class Task:
                                                         RESULT_FILE)):
             returncode = self._collect()
             if returncode == 0:
-                self.status = statuses.STATUS_SUCCESS
+                self.status = statuses.SUCCESS
             else:
-                self.status = statuses.STATUS_ERROR
+                self.status = statuses.ERROR
             return True
 
         return False
@@ -367,7 +367,7 @@ class Task:
             if the task failed.
             """
             self.result = None
-            self.status = statuses.STATUS_ERROR
+            self.status = statuses.ERROR
 
             if isinstance(self.scheduler, dict):
                 end_time = lsf.get_end_time(self.stdout)
@@ -397,7 +397,7 @@ class Task:
 
         self._collect()
         self.proc = self.jobid = None
-        self.status = statuses.STATUS_CANCELLED
+        self.status = statuses.CANCELLED
 
 
 class TaskOutput:

@@ -96,15 +96,15 @@ def check(job_id: int) -> tuple[bool, Optional[str]]:
             return found, None
 
         if lsf_status == "DONE":
-            status = statuses.STATUS_SUCCESS
+            status = statuses.SUCCESS
         elif lsf_status == "EXIT":
-            status = statuses.STATUS_ERROR
+            status = statuses.ERROR
         elif lsf_status == "RUN":
-            status = statuses.STATUS_RUNNING
+            status = statuses.RUNNING
         elif lsf_status == "UNKWN":
-            status = statuses.STATUS_UNKNOWN
+            status = statuses.UNKNOWN
         elif lsf_status == "ZOMBI":
-            status = statuses.STATUS_ZOMBIE
+            status = statuses.ZOMBIE
     elif errs == f"Job <{job_id}> is not found":
         found = False
 
