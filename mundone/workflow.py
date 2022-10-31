@@ -491,7 +491,7 @@ class Workflow:
 
     @staticmethod
     def eval_task(tasks: Dict[str, Task], leaves: Set[str], name: str,
-                  result: Set,) -> bool:
+                  result: Set) -> bool:
         """
         Evaluate if a task need be run or skipped
 
@@ -573,6 +573,8 @@ def query_db():
                                                  "utility")
     parser.add_argument("db", metavar="mundone.sqlite", help="SQLite database")
     parser.add_argument("-n", "--name", help="task name")
+    parser.add_argument("-t", "--time", help="task submit time "
+                                             "(format: YYYY-MM-DD HH:MM:SS)")
     parser.add_argument("--all", action="store_true",
                         help="list all tasks, not only 'active' ones")
     parser.add_argument("--done", action="store_true",
@@ -588,12 +590,19 @@ def query_db():
     cur = con.cursor()
     try:
         if args.name:
-            cur.execute(
-                """
-                SELECT stdout, stderr 
-                FROM task 
-                WHERE name = ? AND active = 1
-                """, (args.name,))
+            cond = "WHERE name = ? AND active = 1"
+            params = [args.name]
+
+            if args.time:
+                try:
+                    datetime.strptime(args.time, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    parser.error(f"-t, --time: invalid format")
+                else:
+                    cond = "WHERE name = ? AND submit_time = ?"
+                    params = [args.name, args.time]
+
+            cur.execute(f"SELECT stdout, stderr FROM task {cond}", params)
             row = cur.fetchone()
             if row:
                 out, err = row
