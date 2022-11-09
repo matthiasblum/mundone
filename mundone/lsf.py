@@ -82,12 +82,18 @@ def kill(job_id: int, force: bool = True):
 
 def check(job_id: int) -> tuple[bool, Optional[str]]:
     cmd = ["bjobs", "-w", str(job_id)]
-    outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
+
+    try:
+        outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
+    except OSError:
+        # Assume job is found and pending (so will be checked again soon)
+        return True, statuses.PENDING
+
     outs = outs.strip().decode()
     errs = errs.strip().decode()
 
     found = True
-    status = None
+    status = statuses.PENDING
 
     if outs:
         try:
