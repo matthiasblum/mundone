@@ -40,7 +40,7 @@ class Task:
         self.proc = None
         self.file_handlers = None  # file handlers (stdout, stderr)
 
-        # LSF job
+        # LSF/SLURM job
         self.jobid = None
         self.unknown_start = None  # first time job status is UNKWN
 
@@ -121,14 +121,26 @@ class Task:
     @property
     def cputime(self) -> Optional[int]:
         if isinstance(self.scheduler, dict):
-            return lsf.get_cpu_time(self.stdout)
+            scheduler = self.scheduler.get("type", "LSF")
+            if scheduler == "LSF":
+                return lsf.get_cpu_time(self.stdout)
+            elif scheduler == "SLURM":
+                raise NotImplementedError
+            else:
+                raise ValueError(scheduler)
         else:
             return None
 
     @property
     def maxmem(self) -> Optional[int]:
         if isinstance(self.scheduler, dict):
-            return lsf.get_max_memory(self.stdout)
+            scheduler = self.scheduler.get("type", "LSF")
+            if scheduler == "LSF":
+                return lsf.get_max_memory(self.stdout)
+            elif scheduler == "SLURM":
+                raise NotImplementedError
+            else:
+                raise ValueError(scheduler)
         else:
             return None
 
