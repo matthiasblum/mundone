@@ -5,11 +5,10 @@ import shutil
 import sys
 import time
 from datetime import datetime
-from subprocess import Popen
 from tempfile import mkdtemp
 from typing import Callable, Optional, Sequence
 
-from . import lsf, runner, statuses
+from mundone import executors, states
 
 
 INPUT_FILE = "input.pickle"
@@ -28,41 +27,44 @@ class Task:
         elif kwargs is not None and not isinstance(kwargs, dict):
             raise TypeError("Task() arg 3 must be a dict")
 
+        self.id = None
         self.fn = fn
         self.args = args if args is not None else []
         self.kwargs = kwargs if kwargs is not None else {}
 
         self.name = str(_kwargs.get("name", fn.__name__))
-        self.status = statuses.PENDING
+        self.status = states.PENDING
         self.workdir = None
-
-        # Local process
-        self.proc = None
-        self.file_handlers = None  # file handlers (stdout, stderr)
-
-        # LSF/SLURM job
-        self.jobid = None
-        self.unknown_start = None  # first time job status is UNKWN
-
-        self.stdout = ""
-        self.stderr = ""
-        self.result = None
 
         self.create_time = datetime.now()
         self.submit_time = None
         self.start_time = None
         self.end_time = None
+        self.unknown_since = None
 
-        self.returncode = None
-        self.trust_scheduler = True
+        self.stdout = self.stderr = ""
+        self.result = None
 
         if _kwargs.get("scheduler"):
-            if isinstance(_kwargs["scheduler"], dict):
-                self.scheduler = _kwargs["scheduler"]
+            scheduler_obj = _kwargs["scheduler"]
+
+            try:
+                scheduler = scheduler_obj["type"].upper()
+            except TypeError:
+                raise TypeError("scheduler: must be a dictionary")
+            except KeyError:
+                raise KeyError("scheduler: 'type' is mandatory")
+            except AttributeError:
+                raise KeyError("scheduler: 'type' must be a string")
+
+            if scheduler == "LSF":
+                self.executor = executors.LsfExecutor()
+            elif scheduler == "SLURM":
+                self.executor = executors.SlurmExecutor()
             else:
-                self.scheduler = {}
+                raise ValueError("scheduler: 'type' must be 'LSF' or 'SLURM'")
         else:
-            self.scheduler = None
+            self.executor = executors.LocalExecutor()
 
         self.requires = set()
         for arg in self.args:
@@ -97,54 +99,27 @@ class Task:
         return TaskOutput(self)
 
     @property
-    def id(self) -> Optional[int]:
-        if self.proc is not None:
-            return self.proc.pid
-        elif self.jobid is not None:
-            return -self.jobid
-        else:
-            return None
-
-    @property
     def state(self) -> str:
-        if self.status == statuses.PENDING:
+        if self.status == states.PENDING:
             return "pending"
-        elif self.status == statuses.RUNNING:
+        elif self.status == states.RUNNING:
             return "running"
-        elif self.status == statuses.ERROR:
+        elif self.status == states.ERROR:
             return "failed"
-        elif self.status == statuses.CANCELLED:
+        elif self.status == states.CANCELLED:
             return "cancelled"
-        elif self.status == statuses.SUCCESS:
+        elif self.status == states.SUCCESS:
             return "done"
 
     @property
     def cputime(self) -> Optional[int]:
-        if isinstance(self.scheduler, dict):
-            scheduler = self.scheduler.get("type", "LSF")
-            if scheduler == "LSF":
-                return lsf.get_cpu_time(self.stdout)
-            elif scheduler == "SLURM":
-                raise NotImplementedError
-            else:
-                raise ValueError(scheduler)
-        else:
-            return None
+        return self.executor.get_cpu_time(self.stdout)
 
     @property
     def maxmem(self) -> Optional[int]:
-        if isinstance(self.scheduler, dict):
-            scheduler = self.scheduler.get("type", "LSF")
-            if scheduler == "LSF":
-                return lsf.get_max_memory(self.stdout)
-            elif scheduler == "SLURM":
-                raise NotImplementedError
-            else:
-                raise ValueError(scheduler)
-        else:
-            return None
+        return self.executor.get_max_memory(self.stdout)
 
-    def _pack(self, workdir: str):
+    def pack(self, workdir: str):
         if self.workdir is None:
             if self.add_random_suffix:
                 self.workdir = mkdtemp(prefix=self.name, dir=workdir)
@@ -179,7 +154,7 @@ class Task:
             pickle.dump(module_name.encode(), fh)
             pickle.dump(p, fh)
 
-    def ready(self) -> bool:
+    def is_ready(self) -> bool:
         args = []
         for arg in self.args:
             if isinstance(arg, TaskOutput):
@@ -204,67 +179,51 @@ class Task:
         self.kwargs = kwargs
         return True
 
-    def running(self) -> bool:
-        return self.status == statuses.RUNNING
+    def is_running(self) -> bool:
+        return self.status == states.RUNNING
 
-    def completed(self) -> bool:
-        return self.status == statuses.SUCCESS
+    def is_done(self) -> bool:
+        return self.status in (states.SUCCESS, states.ERROR, states.CANCELLED)
 
-    def done(self) -> bool:
-        return self.status in (statuses.SUCCESS, statuses.ERROR, statuses.CANCELLED)
+    def is_successful(self) -> bool:
+        return self.status == states.SUCCESS
 
     def start(self, **kwargs) -> bool:
         workdir = kwargs.get("dir", os.getcwd())
-        trust_scheduler = kwargs.get("trust_scheduler", True)
+        # trust_scheduler = kwargs.get("trust_scheduler", True)
 
-        if self.running() or not self.ready():
+        if self.is_running() or not self.is_ready():
             return True
 
-        self._pack(workdir)
-        output_file = os.path.join(self.workdir, OUTPUT_FILE)
-        error_file = os.path.join(self.workdir, ERROR_FILE)
-        input_file = os.path.join(self.workdir, INPUT_FILE)
-        result_file = os.path.join(self.workdir, RESULT_FILE)
-        self.trust_scheduler = trust_scheduler
-        self.proc = self.jobid = self.file_handlers = None
+        self.pack(workdir)
+        # self.trust_scheduler = trust_scheduler
+        self.id = self.executor.submit(os.path.join(self.workdir, INPUT_FILE),
+                                       os.path.join(self.workdir, RESULT_FILE),
+                                       os.path.join(self.workdir, OUTPUT_FILE),
+                                       os.path.join(self.workdir, ERROR_FILE))
 
-        if isinstance(self.scheduler, dict):
-            job_id = lsf.submit(name=self.name,
-                                in_file=input_file,
-                                out_file=result_file,
-                                stdout_file=output_file,
-                                stderr_file=error_file,
-                                queue=self.scheduler.get("queue"),
-                                project=self.scheduler.get("project"),
-                                cpu=self.scheduler.get("cpu"),
-                                mem=self.scheduler.get("mem"),
-                                tmp=self.scheduler.get("tmp"),
-                                scratch=self.scheduler.get("scratch"))
+        if self.id is None:
+            time.sleep(3)
+            return False
 
-            if job_id is None:
-                time.sleep(3)
-                return False
-
-            self.jobid = job_id
-        else:
-            cmd = [
-                sys.executable,
-                os.path.realpath(runner.__file__),
-                input_file,
-                result_file
-            ]
-
-            fh_out = open(output_file, "wt")
-            fh_err = open(error_file, "wt")
-            self.proc = Popen(cmd, stdout=fh_out, stderr=fh_err)
-            self.file_handlers = (fh_out, fh_err)
-
-        self.status = statuses.RUNNING  # actually not running: submitted
+        self.status = states.RUNNING
         self.submit_time = datetime.now()
         self.start_time = self.end_time = None
         return True
 
-    def _clean(self, seconds: int = 30, max_attempts: int = 5):
+    def terminate(self, force: bool = False):
+        if self.is_done():
+            return
+
+        print(self.name)
+        self.executor.kill(force)
+        while not self.executor.ready_to_collect():
+            time.sleep(1)
+
+        self.collect()
+        self.status = states.CANCELLED
+
+    def clean(self, seconds: int = 30, max_attempts: int = 5):
         num_attempts = 0
         while True:
             num_attempts += 1
@@ -278,84 +237,40 @@ class Task:
             else:
                 break
 
+        self.id = self.workdir = None
+
     def wait(self, seconds: int = 10):
-        while not self.done():
+        while not self.is_done():
             self.poll()
             time.sleep(seconds)
 
     def poll(self):
-        if self.status != statuses.RUNNING:
+        if self.status != states.RUNNING:
             return
 
-        if self.proc is not None:
-            returncode = self.proc.poll()
-            if returncode is not None:
-                self._collect()
-                self.proc = None
-                if returncode == 0:
-                    self.status = statuses.SUCCESS
-                else:
-                    self.status = statuses.ERROR
-        elif self.jobid is not None:
-            found, status = lsf.check(self.jobid)
+        status = self.executor.poll()
+        if status == states.NOT_FOUND:
+            self.try_collect()
+        elif (status in (states.SUCCESS, states.ERROR)
+              and self.executor.ready_to_collect()):
+            self.collect()
+            self.status = status
+        elif status == states.RUNNING:
+            # Reset unknown status timer
+            self.unknown_since = None
+        elif status == states.UNKNOWN:
+            now = datetime.now()
+            if self.unknown_since is None:
+                self.unknown_since = now
+            elif (now - self.unknown_since).total_seconds() >= 3600:
+                self.terminate(force=True)
 
-            if found:
-                ok_or_err = [statuses.SUCCESS, statuses.ERROR]
-                file = os.path.join(self.workdir, OUTPUT_FILE)
-                if status in ok_or_err and lsf.is_ready_to_collect(file):
-                    returncode = self._collect()
-                    self.jobid = None
-
-                    if self.trust_scheduler:
-                        if status == statuses.SUCCESS:
-                            self.status = statuses.SUCCESS
-                        else:
-                            self.status = statuses.ERROR
-                    elif returncode == 0:
-                        self.status = statuses.SUCCESS
-                    else:
-                        self.status = statuses.ERROR
-                elif status == statuses.RUNNING:
-                    # Reset unknown status timer
-                    self.unknown_start = None
-                elif status == statuses.UNKNOWN:
-                    now = datetime.now()
-                    if self.unknown_start is None:
-                        self.unknown_start = now
-                    elif (now - self.unknown_start).total_seconds() >= 3600:
-                        self.terminate(force=True)
-                elif status == statuses.ZOMBIE:
-                    self.terminate(force=True)
-            else:
-                if not self._try_collect():
-                    # Job does not exist and results not found: error
-                    self.status = statuses.ERROR
-        else:
-            self._try_collect()
-
-    def _try_collect(self) -> bool:
-        if self.workdir and os.path.isfile(os.path.join(self.workdir,
-                                                        RESULT_FILE)):
-            returncode = self._collect()
-            if returncode == 0:
-                self.status = statuses.SUCCESS
-            else:
-                self.status = statuses.ERROR
-            return True
-
-        return False
-
-    def _collect(self) -> Optional[int]:
+    def collect(self) -> Optional[int]:
         if self.workdir is None:
             # Task cancelled before started
             self.result = None
             self.end_time = datetime.now()
             return None
-        elif self.file_handlers:
-            fh_out, fh_err = self.file_handlers
-            fh_out.close()
-            fh_err.close()
-            self.file_handlers = None
 
         try:
             with open(os.path.join(self.workdir, OUTPUT_FILE), "rt") as fh:
@@ -379,54 +294,49 @@ class Task:
             if the task failed.
             """
             self.result = None
-            self.status = statuses.ERROR
+            self.status = states.ERROR
 
-            if isinstance(self.scheduler, dict):
-                self.start_time = lsf.get_start_time(self.stdout)
-                end_time = lsf.get_end_time(self.stdout)
-                self.end_time = end_time or datetime.now()
-            else:
-                self.end_time = datetime.now()
+            start_time, end_time = self.executor.get_times()
+            self.start_time = start_time or self.start_time
+            self.end_time = end_time or datetime.now()
         else:
             self.result = res[0]
             returncode = res[1]
             self.start_time = res[2]
             self.end_time = res[3]
 
-        self._clean()
+        self.clean()
         return returncode
 
-    def terminate(self, force: bool = False):
-        if self.done():
-            return
-        elif self.proc is not None:
-            self.proc.kill()
-        elif self.jobid is not None:
-            lsf.kill(self.jobid, force=force)
+    def try_collect(self) -> bool:
+        if self.workdir:
+            result_file = os.path.join(self.workdir, RESULT_FILE)
+            if os.path.isfile(result_file):
+                returncode = self.collect()
+                if returncode == 0:
+                    self.status = states.SUCCESS
+                else:
+                    self.status = states.ERROR
 
-            file = os.path.join(self.workdir, OUTPUT_FILE)
-            while not lsf.is_ready_to_collect(file):
-                time.sleep(1)
+                return True
 
-        self._collect()
-        self.proc = self.jobid = None
-        self.status = statuses.CANCELLED
+        return False
 
 
 class TaskOutput:
     def __init__(self, task: Task):
-        self._task = task
+        self.task = task
 
     def ready(self) -> bool:
-        self._task.poll()
-        return self._task.done()
+        self.task.poll()
+        return self.task.is_successful()
 
     def read(self):
-        return self._task.result
+        return self.task.result
 
     @property
     def task_name(self) -> str:
-        return self._task.name
+        return self.task.name
 
 
 def as_completed(tasks: Sequence[Task], seconds: int = 10):
@@ -435,7 +345,7 @@ def as_completed(tasks: Sequence[Task], seconds: int = 10):
 
         for t in tasks:
             t.poll()
-            if t.done():
+            if t.is_done():
                 yield t
             else:
                 _tasks.append(t)

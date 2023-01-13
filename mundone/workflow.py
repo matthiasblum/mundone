@@ -2,14 +2,14 @@ import argparse
 import json
 import logging
 import os
-import re
 import sqlite3
 import time
 import sys
 from datetime import datetime
 from typing import Dict, List, Optional, Sequence, Set
 
-from . import lsf
+from .executors.lsf import LsfExecutor
+from . import states
 from .task import Task
 
 
@@ -161,11 +161,11 @@ class Workflow:
             # Check running tasks
             changes = []
             for task in self.tasks.values():
-                if task.running():
+                if task.is_running():
                     # Task is flagged as running the database, check this
                     task.poll()
 
-                    if task.done():
+                    if task.is_done():
                         # Task is now done: update database
                         changes.append((
                             task.status,
@@ -253,7 +253,7 @@ class Workflow:
         # Remove completed leaves
         tasks = []
         for name in leaves:
-            if not self.tasks[name].completed():
+            if not self.tasks[name].is_successful():
                 tasks.append(name)
 
         return tasks
@@ -349,9 +349,9 @@ class Workflow:
 
             for name, task in running.items():
                 task.poll()
-                if not task.done():
+                if not task.is_done():
                     continue
-                elif task.completed():
+                elif task.is_successful():
                     logger.info(f"{name:<40} done")
                     completed.add(name)
                     self.update_task(task)
@@ -412,7 +412,7 @@ class Workflow:
             Workflow instance (e.g. with the --detach option on)
             """
             for name, task in self.tasks.items():
-                if not task.running() and not task.done():
+                if not task.is_running() and not task.is_done():
                     if name in completed:
                         completed.remove(name)
                         pending.add(name)
@@ -470,7 +470,7 @@ class Workflow:
         to_kill = []
         for task_name, task in self.tasks.items():
             task.poll()
-            if task.running():
+            if task.is_running():
                 to_kill.append((task_name, task))
 
         if to_kill:
@@ -514,13 +514,13 @@ class Workflow:
         """
         run_children = False
         task = tasks[name]
-        if task.running():
+        if task.is_running():
             # This task is running: we don't want to run it right now.
             return False
         elif name in leaves:
             result.add(name)
             run_children = True
-        elif not task.completed():
+        elif not task.is_successful():
             # Task never completed: need to run it.
             result.add(name)
 
@@ -532,7 +532,7 @@ class Workflow:
                 # than its direct child: need to run the descendants.
                 run_children = True
                 result.add(name)
-            elif (task.completed() and parent_task.completed()
+            elif (task.is_successful() and parent_task.is_successful()
                   and parent_task.end_time > task.end_time):
                 # Parent task completed more recently: run this task
                 # and its descendants.
@@ -616,13 +616,13 @@ def query_db():
             for name, start, end, status, active, stdout in cur:
                 if not active and not args.all:
                     continue
-                elif status is None:
+                elif status == states.PENDING:
                     status = 'pending'
-                elif status == 0:
+                elif status == states.SUCCESS:
                     status = 'done'
-                elif status == 1:
+                elif status == states.RUNNING:
                     status = 'running'
-                elif status == 2:
+                elif status == states.ERROR:
                     status = 'failed'
                 else:
                     status = 'cancelled'
@@ -631,7 +631,7 @@ def query_db():
                     continue
 
                 if args.lsf_memory:
-                    max_mem = lsf.get_max_memory(stdout)
+                    max_mem = LsfExecutor.get_max_memory(stdout)
                     mem = f"{'?':>10}" if max_mem is None else f"{max_mem:>10}"
                 else:
                     mem = ""

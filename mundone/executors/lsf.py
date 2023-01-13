@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from datetime import datetime
-from subprocess import Popen, PIPE
+from subprocess import Popen, DEVNULL, PIPE
 from typing import Optional
 
 from mundone import runner, states
@@ -78,7 +78,7 @@ class LsfExecutor:
 
         return None
 
-    def poll(self) -> Optional[int]:
+    def poll(self) -> int:
         cmd = ["bjobs", "-w", str(self.id)]
 
         try:
@@ -98,8 +98,7 @@ class LsfExecutor:
 
             return STATES.get(lsf_status, states.PENDING)
 
-        # Job likely not found
-        return None
+        return states.NOT_FOUND
 
     def ready_to_collect(self) -> bool:
         try:
@@ -108,13 +107,16 @@ class LsfExecutor:
         except FileNotFoundError:
             return False
 
-    def get_start_end_times(self) -> tuple[datetime, datetime]:
-        start_time = end_time = None
-
+    def get_times(self) -> tuple[datetime, datetime]:
         with open(self.out_file, "rt") as fh:
             stdout = fh.read()
 
+        return self.get_times_from_string(stdout)
+
+    @staticmethod
+    def get_times_from_string(stdout: str) -> tuple[datetime, datetime]:
         fmt = "%a %b %d %H:%M:%S %Y"
+        start_time = end_time = None
         match = re.search(r"^Started at (.+)$", stdout, re.M)
         try:
             start_time = datetime.strptime(match.group(1), fmt)
@@ -129,3 +131,29 @@ class LsfExecutor:
 
         return start_time, end_time
 
+    @staticmethod
+    def get_max_memory(stdout: str) -> Optional[int]:
+        match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
+        try:
+            group = match.group(1)
+            return 0 if group == "-" else int(group.split()[0])
+        except (AttributeError, ValueError):
+            return None
+
+    @staticmethod
+    def get_cpu_time(stdout: str) -> Optional[int]:
+        match = re.search(r"^\s*CPU time :\s+(\d+)\.\d+ sec.$", stdout, re.M)
+        try:
+            return int(match.group(1))
+        except (AttributeError, ValueError):
+            return None
+
+    def kill(self, force: bool = False):
+        if self.id is None:
+            return
+        elif force:
+            cmd = ["bkill", "-r", str(self.id)]
+        else:
+            cmd = ["bkill", str(self.id)]
+
+        Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()

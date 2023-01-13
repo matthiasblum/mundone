@@ -29,10 +29,10 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
             action = task = None
 
         if action == _TASK_REQ:
-            if task.running():
+            if task.is_running():
                 # Passed task is already running
                 running.append(task)
-            elif task.done():
+            elif task.is_done():
                 # Passed task is already done: send it back
                 main_res.put(task)
             elif len(running) < max_running:
@@ -64,7 +64,7 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
         for _ in range(len(running)):
             task = sec_res.get()
 
-            if task.running():
+            if task.is_running():
                 tmp_running.append(task)
             else:
                 main_res.put(task)

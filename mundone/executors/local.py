@@ -38,5 +38,17 @@ class LocalExecutor:
     def ready_to_collect(self) -> bool:
         return True
 
-    def get_start_end_times(self) -> tuple[datetime, datetime]:
+    def get_times(self) -> tuple[datetime, datetime]:
         return self.start_time, self.end_time
+
+    @staticmethod
+    def get_max_memory(*args):
+        return None
+
+    @staticmethod
+    def get_cpu_time(*args):
+        return None
+
+    def kill(self, force: bool = False):
+        if self.proc is not None:
+            self.proc.kill()

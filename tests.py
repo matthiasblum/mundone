@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
-
 import os
 import random
 import time
 
-from mundone import Task, Workflow, as_completed
+from mundone import Pool, Task, Workflow, as_completed
 
 
 def hello():
@@ -63,7 +61,7 @@ def workflow():
     t8 = Task(goodbye, requires=(t6, "retry"))
 
     with Workflow([t1, t2, t3, t4, t5, t6, t7, t8]) as w:
-        w.start(max_retries=0)
+        w.run(max_retries=0)
 
 
 def batch():
@@ -74,4 +72,19 @@ def batch():
         tasks.append(t)
 
     for t in as_completed(tasks, seconds=0):
-        print(t.workdir, t.result)
+        print(t.result)
+
+
+def pool():
+    with Pool(path=os.getcwd(), max_running=10) as p:
+        for i in range(1, 100):
+            p.submit(Task(sleep, name=f"sleep-{i}"))
+
+        for t in p.as_completed(wait=True):
+            print(t, t.result)
+
+
+# if __name__ == '__main__':
+#     workflow()
+#     batch()
+#     pool()
