@@ -6,7 +6,6 @@ import sqlite3
 import time
 import sys
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence, Set
 
 from .executors.lsf import LsfExecutor
 from . import states
@@ -27,7 +26,7 @@ DBNAME = "mundone.sqlite"
 
 
 class Workflow:
-    def __init__(self, tasks: Sequence[Task], **kwargs):
+    def __init__(self, tasks: list[Task], **kwargs):
         self.name = kwargs.get("name")
         self.id = kwargs.get("id", "1")
         if not isinstance(self.id, str):
@@ -118,7 +117,7 @@ class Workflow:
             )
             con.execute("CREATE INDEX IF NOT EXISTS i_name ON task (name)")
 
-    def get_tasks(self, exclude: Optional[Sequence[str]] = None,
+    def get_tasks(self, exclude: list[str] | None = None,
                   update: bool = False):
         if exclude is None:
             exclude = []
@@ -192,7 +191,7 @@ class Workflow:
         cur.close()
         con.close()
 
-    def run(self, tasks: Optional[Sequence[str]] = None,
+    def run(self, tasks: list[str] | None = None,
             dry_run: bool = False, max_retries: int = 0,
             monitor: bool = True) -> bool:
         """
@@ -240,7 +239,7 @@ class Workflow:
         self.running = True
         return self.run_tasks(tasks, max_retries)
 
-    def get_remaining_tasks(self) -> List[str]:
+    def get_remaining_tasks(self) -> list[str]:
         # Find tasks without descendants
         leaves = set(self.tasks.keys())
         for task in self.tasks.values():
@@ -258,7 +257,7 @@ class Workflow:
 
         return tasks
 
-    def init_tasks(self, tasks: Sequence[str], dry_run: bool) -> List[str]:
+    def init_tasks(self, tasks: list[str], dry_run: bool) -> list[str]:
         """
 
         Args:
@@ -317,7 +316,7 @@ class Workflow:
 
         return tasks
 
-    def run_tasks(self, pending: Sequence[str], max_retries: int,
+    def run_tasks(self, pending: list[str], max_retries: int,
                   seconds: int = 1) -> bool:
         child2parents = {}
         attempts = {}
@@ -491,8 +490,8 @@ class Workflow:
             return fh.read(16).decode() == "SQLite format 3\x00"
 
     @staticmethod
-    def eval_task(tasks: Dict[str, Task], leaves: Set[str], name: str,
-                  result: Set) -> bool:
+    def eval_task(tasks: dict[str, Task], leaves: set[str], name: str,
+                  result: set) -> bool:
         """
         Evaluate if a task need be run or skipped
 
@@ -542,7 +541,7 @@ class Workflow:
         return run_children
 
     @staticmethod
-    def strptime(date_string: Optional[str]) -> Optional[datetime]:
+    def strptime(date_string: str | None) -> datetime | None:
         try:
             dt = datetime.strptime(date_string, "%Y-%m-%d %H:%M:%S")
         except TypeError:
@@ -551,7 +550,7 @@ class Workflow:
             return dt
 
     @staticmethod
-    def strftime(dt: Optional[datetime]) -> Optional[str]:
+    def strftime(dt: datetime | None) -> str | None:
         try:
             date_string = dt.strftime("%Y-%m-%d %H:%M:%S")
         except AttributeError:

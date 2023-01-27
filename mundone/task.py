@@ -6,7 +6,7 @@ import sys
 import time
 from datetime import datetime
 from tempfile import mkdtemp
-from typing import Callable, Optional, Sequence
+from typing import Callable
 
 from mundone import executors, states
 
@@ -18,8 +18,8 @@ RESULT_FILE = "output.pickle"
 
 
 class Task:
-    def __init__(self, fn: Callable, args: Optional[Sequence] = None,
-                 kwargs: Optional[dict] = None, **_kwargs):
+    def __init__(self, fn: Callable, args: list | tuple | None = None,
+                 kwargs: dict | None = None, **_kwargs):
         if not callable(fn):
             raise TypeError(f"'{fn}' is not callable")
         elif args is not None and not isinstance(args, (list, tuple)):
@@ -112,11 +112,11 @@ class Task:
             return "done"
 
     @property
-    def cputime(self) -> Optional[int]:
+    def cputime(self) -> int | None:
         return self.executor.get_cpu_time(self.stdout)
 
     @property
-    def maxmem(self) -> Optional[int]:
+    def maxmem(self) -> int | None:
         return self.executor.get_max_memory(self.stdout)
 
     def pack(self, workdir: str):
@@ -265,7 +265,7 @@ class Task:
             elif (now - self.unknown_since).total_seconds() >= 3600:
                 self.terminate(force=True)
 
-    def collect(self) -> Optional[int]:
+    def collect(self) -> int | None:
         if self.workdir is None:
             # Task cancelled before started
             self.result = None
@@ -339,7 +339,7 @@ class TaskOutput:
         return self.task.name
 
 
-def as_completed(tasks: Sequence[Task], seconds: int = 10):
+def as_completed(tasks: list[Task], seconds: int = 10):
     while tasks:
         _tasks = []
 

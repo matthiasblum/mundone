@@ -3,7 +3,6 @@ import re
 import sys
 from datetime import datetime
 from subprocess import Popen, DEVNULL, PIPE
-from typing import Optional
 
 from mundone import runner, states
 
@@ -20,7 +19,7 @@ class SlurmExecutor:
         self.out_file = None
         self.id = None
 
-    def submit(self, src: str, dst: str, out: str, err: str) -> Optional[int]:
+    def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         pass  # TODO
 
     def poll(self) -> int:
@@ -37,11 +36,11 @@ class SlurmExecutor:
         pass  # TODO
 
     @staticmethod
-    def get_max_memory(stdout: str) -> Optional[int]:
+    def get_max_memory(stdout: str) -> int | None:
         pass  # TODO
 
     @staticmethod
-    def get_cpu_time(stdout: str) -> Optional[int]:
+    def get_cpu_time(stdout: str) -> int | None:
         pass  # TODO
 
     def kill(self, force: bool = False):

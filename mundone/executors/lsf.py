@@ -3,7 +3,6 @@ import re
 import sys
 from datetime import datetime
 from subprocess import Popen, DEVNULL, PIPE
-from typing import Optional
 
 from mundone import runner, states
 
@@ -30,7 +29,7 @@ class LsfExecutor:
         self.out_file = None
         self.id = None
 
-    def submit(self, src: str, dst: str, out: str, err: str) -> Optional[int]:
+    def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         self.out_file = out
         self.id = None
         cmd = ["bsub"]
@@ -132,7 +131,7 @@ class LsfExecutor:
         return start_time, end_time
 
     @staticmethod
-    def get_max_memory(stdout: str) -> Optional[int]:
+    def get_max_memory(stdout: str) -> int | None:
         match = re.search(r"^\s*Max Memory :\s+(\d+\sMB|-)$", stdout, re.M)
         try:
             group = match.group(1)
@@ -141,7 +140,7 @@ class LsfExecutor:
             return None
 
     @staticmethod
-    def get_cpu_time(stdout: str) -> Optional[int]:
+    def get_cpu_time(stdout: str) -> int | None:
         match = re.search(r"^\s*CPU time :\s+(\d+)\.\d+ sec.$", stdout, re.M)
         try:
             return int(match.group(1))
