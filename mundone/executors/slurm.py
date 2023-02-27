@@ -72,7 +72,7 @@ class SlurmExecutor:
 
         runner_file = os.path.realpath(runner.__file__)
         cmd += ["--wrap", f'"{sys.executable} {runner_file} {src} {dst}; '
-                          f'echo ${JOB_SIGNATURE}"']
+                          f'echo {JOB_SIGNATURE}"']
         outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         outs = outs.strip().decode()
         self.id = int(outs)
