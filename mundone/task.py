@@ -215,7 +215,6 @@ class Task:
         if self.is_done():
             return
 
-        print(self.name)
         self.executor.kill(force)
         while not self.executor.ready_to_collect():
             time.sleep(1)
