@@ -82,14 +82,8 @@ class SlurmExecutor:
         return STATES.get(state, states.NOT_FOUND)
 
     def ready_to_collect(self) -> bool:
-        try:
-            with open(self.out_file, "rt") as fh:
-                if JOB_SIGNATURE in fh.read():
-                    return True
-        except FileNotFoundError:
-            pass
-
-
+        # TODO: check that output (binary) file exists if job completed?
+        return os.path.isfile(self.out_file)
 
     def get_times(self) -> tuple[datetime, datetime]:
         info = self.run_sacct(self.id)
