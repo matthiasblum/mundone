@@ -25,7 +25,6 @@ STATES = {
     "SUSPENDED": states.RUNNING,
     "TIMEOUT": states.ERROR,
 }
-JOB_SIGNATURE = "__mundone_slurm__"
 
 
 class SlurmExecutor:
@@ -71,8 +70,7 @@ class SlurmExecutor:
         cmd += ["-o", out, "-e", err]
 
         runner_file = os.path.realpath(runner.__file__)
-        cmd += ["--wrap", f'"{sys.executable} {runner_file} {src} {dst}; '
-                          f'echo {JOB_SIGNATURE}"']
+        cmd += ["--wrap", f"{sys.executable} {runner_file} {src} {dst}"]
         outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         outs = outs.strip().decode()
         self.id = int(outs)
@@ -86,9 +84,12 @@ class SlurmExecutor:
     def ready_to_collect(self) -> bool:
         try:
             with open(self.out_file, "rt") as fh:
-                return JOB_SIGNATURE in fh.read()
+                if JOB_SIGNATURE in fh.read():
+                    return True
         except FileNotFoundError:
-            return False
+            pass
+
+
 
     def get_times(self) -> tuple[datetime, datetime]:
         info = self.run_sacct(self.id)
