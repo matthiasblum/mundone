@@ -67,7 +67,7 @@ class SlurmExecutor:
         time_limit = self.limit.total_seconds()
         hours, remainder = divmod(time_limit, 3600)
         minutes, seconds = divmod(remainder, 60)
-        cmd += ["-t", f"{hours}:{minutes:02}:{seconds:02}"]
+        cmd += ["-t", f"{hours:.0f}:{minutes:02.0f}:{seconds:02.0f}"]
         cmd += ["-o", out, "-e", err]
 
         runner_file = os.path.realpath(runner.__file__)
