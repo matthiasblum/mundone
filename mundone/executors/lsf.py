@@ -23,6 +23,7 @@ class LsfExecutor:
         self.queue = params.get("queue")
         self.project = params.get("project")
         self.num_cpus = params.get("cpu")
+        self.num_gpus = params.get("gpu")
         self.memory = params.get("mem")
         self.temp = params.get("tmp")
         self.scratch = params.get("scratch")
@@ -44,6 +45,12 @@ class LsfExecutor:
 
         if isinstance(self.num_cpus, int) and self.num_cpus > 1:
             cmd += ["-n", str(self.num_cpus), "-R", "span[hosts=1]"]
+
+        if isinstance(self.num_gpus, int) and self.num_gpus >= 1:
+            cmd += ["-gpu", f"num={self.num_gpus}"]
+        elif isinstance(self.num_gpus, str):
+            # https://www.ibm.com/docs/en/spectrum-lsf/10.1.0?topic=o-gpu
+            cmd += ["-gpu", self.num_gpus]
 
         if isinstance(self.memory, (float, int)):
             cmd += [

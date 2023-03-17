@@ -33,6 +33,7 @@ class SlurmExecutor:
         self.queue = params.get("queue")
         self.project = params.get("project")
         self.num_cpus = params.get("cpu")
+        self.num_gpus = params.get("gpu")
         self.memory = params.get("mem")
         self.temp = params.get("tmp")
         self.scratch = params.get("scratch")
@@ -55,7 +56,15 @@ class SlurmExecutor:
             "-n", "1",  # --ntasks=1
         ]
         if isinstance(self.num_cpus, int) and self.num_cpus > 1:
+            # --cpus-per-task
             cmd += ["-c", str(self.num_cpus)]
+
+        if isinstance(self.num_gpus, int) and self.num_gpus >= 1:
+            cmd += ["--gpus-per-task", str(self.num_gpus)]
+        elif isinstance(self.num_gpus, str):
+            # format: [type:]<number>
+            # https://slurm.schedmd.com/sbatch.html#OPT_gpus-per-task
+            cmd += ["--gpus-per-task", self.num_gpus]
 
         if isinstance(self.memory, (float, int)):
             cmd.append(f"--mem={self.memory}M")
