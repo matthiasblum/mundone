@@ -58,9 +58,11 @@ class Task:
                 raise KeyError("scheduler: 'type' must be a string")
 
             if scheduler == "LSF":
-                self.executor = executors.LsfExecutor(**scheduler_obj)
+                self.executor = executors.LsfExecutor(**scheduler_obj,
+                                                      name=self.name)
             elif scheduler == "SLURM":
-                self.executor = executors.SlurmExecutor(**scheduler_obj)
+                self.executor = executors.SlurmExecutor(**scheduler_obj,
+                                                        name=self.name)
             else:
                 raise ValueError("scheduler: 'type' must be 'LSF' or 'SLURM'")
         else:

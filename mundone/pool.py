@@ -1,4 +1,5 @@
 from threading import Thread
+from typing import Iterable
 from queue import Queue, Empty
 
 from .task import Task
@@ -101,7 +102,7 @@ def _manager(main_req: Queue, main_res: Queue, sec_req: Queue, sec_res: Queue,
 
 class Pool:
     def __init__(self, path: str, max_running: int, kill_on_exit: bool = True,
-                 threads: int = 4):
+                 threads: int = 4, tasks: Iterable | None = None):
         self._dir = path
         self._max_running = max_running
         self._kill_on_exit = kill_on_exit
