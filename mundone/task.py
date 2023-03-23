@@ -226,8 +226,6 @@ class Task:
         self.status = states.CANCELLED
 
     def clean(self, seconds: int = 30, max_attempts: int = 5):
-        self.id = None
-
         if not self.keep_tmp:
             num_attempts = 0
             while True:
