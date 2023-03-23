@@ -92,6 +92,7 @@ class Task:
                                 "of strings or Tasks")
 
         self.add_random_suffix = _kwargs.get("random_suffix", True)
+        self.keep_tmp = _kwargs.get("keep", False)
 
     def __repr__(self) -> str:
         return self.name
@@ -225,20 +226,23 @@ class Task:
         self.status = states.CANCELLED
 
     def clean(self, seconds: int = 30, max_attempts: int = 5):
-        num_attempts = 0
-        while True:
-            num_attempts += 1
-            try:
-                shutil.rmtree(self.workdir)
-            except OSError:
-                if num_attempts == max_attempts:
-                    raise
-                else:
-                    time.sleep(seconds)
-            else:
-                break
+        self.id = None
 
-        self.id = self.workdir = None
+        if not self.keep_tmp:
+            num_attempts = 0
+            while True:
+                num_attempts += 1
+                try:
+                    shutil.rmtree(self.workdir)
+                except OSError:
+                    if num_attempts == max_attempts:
+                        raise
+                    else:
+                        time.sleep(seconds)
+                else:
+                    break
+
+            self.workdir = None
 
     def wait(self, seconds: int = 10):
         while not self.is_done():
