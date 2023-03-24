@@ -217,10 +217,10 @@ class Task:
     def terminate(self, force: bool = False):
         if self.is_done():
             return
-
-        self.executor.kill(force)
-        while not self.executor.ready_to_collect():
-            time.sleep(1)
+        elif self.is_running():
+            self.executor.kill(force)
+            while not self.executor.ready_to_collect():
+                time.sleep(1)
 
         self.collect()
         self.status = states.CANCELLED
