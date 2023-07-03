@@ -144,5 +144,5 @@ class SlurmExecutor:
         if self.id is None:
             return
 
-        cmd = ["sancel", str(self.id)]
+        cmd = ["scancel", str(self.id)]
         Popen(cmd, stdout=DEVNULL, stderr=DEVNULL).communicate()
