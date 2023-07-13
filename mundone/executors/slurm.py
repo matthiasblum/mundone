@@ -114,7 +114,11 @@ class SlurmExecutor:
         ]
         outs, _ = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         lines = outs.decode().splitlines()
-        keys = lines[0].split("|")
+        try:
+            keys = lines[0].split("|")
+        except IndexError:
+            raise ValueError(f"cannot parse sacct output: {outs.decode()}")
+
         try:
             values = lines[1].split("|")
         except IndexError:
