@@ -40,10 +40,12 @@ class SlurmExecutor:
         self.limit = timedelta(hours=params.get("hours", 24))
         self.out_file = None
         self.id = None
+        self.jobinfo = None
 
     def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         self.out_file = out
         self.id = None
+        self.jobinfo = None
         cmd = ["sbatch", "--parsable"]
         if self.name and isinstance(self.name, str):
             cmd += ["-J", self.name]
@@ -95,12 +97,18 @@ class SlurmExecutor:
         return os.path.isfile(self.out_file)
 
     def get_times(self) -> tuple[datetime, datetime]:
-        info = self.run_sacct(self.id)
+        info = self.get_jobinfo(self.id)
         fmt = "%Y-%m-%dT%H:%M:%S"
         return (
             datetime.strptime(info["Start"], fmt),
             datetime.strptime(info["End"], fmt)
         )
+
+    def get_jobinfo(self, force: bool = False) -> dict[str, str]:
+        if force or self.jobinfo is None:
+            self.jobinfo = self.run_sacct(self.id)
+
+        return self.jobinfo
 
     @staticmethod
     def run_sacct(jobid: int) -> dict[str, str]:
@@ -127,13 +135,13 @@ class SlurmExecutor:
         return dict(zip(keys, values))
 
     def get_max_memory(self, *args) -> int | None:
-        info = self.run_sacct(self.id)
+        info = self.get_jobinfo(self.id)
         # todo
         if not info["MaxRSS"]:
             return None
 
     def get_cpu_time(self, *args) -> int:
-        info = self.run_sacct(self.id)
+        info = self.get_jobinfo(self.id)
         pattern = r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)"  # [DD-[HH:]]MM:SS
         d, h, m, s = re.fullmatch(pattern, info["TotalCPU"]).groups()
         seconds = timedelta(
