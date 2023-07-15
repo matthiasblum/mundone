@@ -4,6 +4,7 @@ import re
 import sys
 from datetime import datetime, timedelta
 from subprocess import Popen, DEVNULL, PIPE
+from typing import Any
 
 from mundone import runner, states
 
@@ -97,51 +98,107 @@ class SlurmExecutor:
         return os.path.isfile(self.out_file)
 
     def get_times(self) -> tuple[datetime, datetime]:
-        info = self.get_jobinfo(self.id)
+        info = self.get_jobinfo()
         fmt = "%Y-%m-%dT%H:%M:%S"
         return (
             datetime.strptime(info["Start"], fmt),
             datetime.strptime(info["End"], fmt)
         )
 
-    def get_jobinfo(self, force: bool = False) -> dict[str, str]:
+    def get_jobinfo(self, force: bool = False) -> dict[str, Any]:
         if force or self.jobinfo is None:
             self.jobinfo = self.run_sacct(self.id)
 
         return self.jobinfo
 
     @staticmethod
-    def run_sacct(jobid: int) -> dict[str, str]:
-        columns = ["Submit", "Start", "End", "State", "TotalCPU", "MaxRSS"]
+    def parse_date(s: str) -> datetime | None:
+        try:
+            dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+        else:
+            return dt
+
+    @staticmethod
+    def parse_time(s: str) -> int | None:
+        # [days-]hours:minutes:seconds[.microseconds]
+        m = re.fullmatch(r"(\d+-)?(\d+):(\d+):(\d+)(\.\d+)?", s)
+        if m:
+            d, h, m, s, ms = m.groups()
+            d = int(d) if d else 0
+            ms = float(ms) if ms else 0
+            td = timedelta(days=d,
+                           hours=int(h),
+                           minutes=int(m),
+                           seconds=int(s),
+                           microseconds=ms)
+            return int(td.total_seconds())
+
+        return None
+
+    @staticmethod
+    def parse_memory(s: str) -> float | None:
+        m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTP])?", s)
+        if m:
+            value, suffix = m.groups()
+            i = [None, "K", "M", "G", "T", "P"].index(suffix)
+            return float(value) / pow(1024, i)
+
+        return None
+
+    @staticmethod
+    def run_sacct(jobid: int) -> dict[str, Any]:
+        fields = ["JobID", "Submit", "Start",
+                  "End", "State", "TotalCPU", "ReqMem", "MaxRSS"]
+        sep = chr(30)
         cmd = [
             "sacct",
-            "-P",
-            "-o", ",".join(columns),
-            "-X",
+            "--parsable2",
+            "--delimiter", sep,
+            "--noheader",
+            "--format", ",".join(fields),
             "-j", str(jobid)
         ]
         outs, _ = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
-        lines = outs.decode().splitlines()
-        try:
-            keys = lines[0].split("|")
-        except IndexError:
-            raise ValueError(f"cannot parse sacct output: {outs.decode()}")
 
-        try:
-            values = lines[1].split("|")
-        except IndexError:
-            values = [None] * len(keys)
+        data = {key: None for key in fields}
 
-        return dict(zip(keys, values))
+        for line in outs.decode().splitlines():
+            try:
+                values = line[0].split(sep)
+            except IndexError:
+                raise ValueError(f"cannot parse sacct output: {line}")
+
+            if values[0].endswith(".extern"):
+                continue
+
+            for field, value in zip(fields[1:], values[1:]):
+                if field in ("Submit", "Start", "State"):
+                    if field != "State":
+                        value = SlurmExecutor.parse_date(value)
+
+                    if value and data[field] is None:
+                        data[field] = value
+                else:
+                    if field == "End":
+                        value = SlurmExecutor.parse_date(value)
+                    elif field == "TotalCPU":
+                        value = SlurmExecutor.parse_time(value)
+                    else:
+                        value = SlurmExecutor.parse_memory(value)
+
+                    if data[field] is None or value > data[field]:
+                        data[field] = value
+
+        return data
 
     def get_max_memory(self, *args) -> int | None:
-        info = self.get_jobinfo(self.id)
-        # todo
-        if not info["MaxRSS"]:
-            return None
+        info = self.get_jobinfo()
+        return info["MaxRSS"]
 
     def get_cpu_time(self, *args) -> int:
-        info = self.get_jobinfo(self.id)
+        info = self.get_jobinfo()
         pattern = r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)"  # [DD-[HH:]]MM:SS
         d, h, m, s = re.fullmatch(pattern, info["TotalCPU"]).groups()
         seconds = timedelta(
