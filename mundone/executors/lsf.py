@@ -113,14 +113,15 @@ class LsfExecutor:
         except FileNotFoundError:
             return False
 
-    def get_times(self) -> tuple[datetime, datetime]:
+    def get_times(self) -> tuple[datetime | None, datetime | None]:
         with open(self.out_file, "rt") as fh:
             stdout = fh.read()
 
         return self.get_times_from_string(stdout)
 
     @staticmethod
-    def get_times_from_string(stdout: str) -> tuple[datetime, datetime]:
+    def get_times_from_string(stdout: str) -> tuple[datetime | None,
+                                                    datetime | None]:
         fmt = "%a %b %d %H:%M:%S %Y"
         start_time = end_time = None
         match = re.search(r"^Started at (.+)$", stdout, re.M)

@@ -97,13 +97,9 @@ class SlurmExecutor:
         # TODO: check that output (binary) file exists if job completed?
         return os.path.isfile(self.out_file)
 
-    def get_times(self) -> tuple[datetime, datetime]:
+    def get_times(self) -> tuple[datetime | None, datetime | None]:
         info = self.get_jobinfo()
-        fmt = "%Y-%m-%dT%H:%M:%S"
-        return (
-            datetime.strptime(info["Start"], fmt),
-            datetime.strptime(info["End"], fmt)
-        )
+        return info["Start"], info["End"]
 
     def get_jobinfo(self, force: bool = False) -> dict[str, Any]:
         if force or self.jobinfo is None:
