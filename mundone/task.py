@@ -120,6 +120,7 @@ class Task:
 
     @property
     def maxmem(self) -> int | None:
+        # In MB
         return self.executor.get_max_memory(self.stdout)
 
     def pack(self, workdir: str):
