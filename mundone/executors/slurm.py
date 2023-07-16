@@ -117,75 +117,74 @@ class SlurmExecutor:
             return dt
 
     @staticmethod
-    def parse_time(s: str) -> int | None:
-        # [days-]hours:minutes:seconds[.microseconds]
-        m = re.fullmatch(r"(\d+-)?(\d+):(\d+):(\d+)(\.\d+)?", s)
-        if m:
-            d, h, m, s, ms = m.groups()
-            d = int(d) if d else 0
-            ms = float(ms) if ms else 0
-            td = timedelta(days=d,
-                           hours=int(h),
-                           minutes=int(m),
-                           seconds=int(s),
-                           microseconds=ms)
-            return int(td.total_seconds())
-
-        return None
+    def parse_time(s: str) -> int:
+        # [DD-[HH:]]MM:SS[.MS]
+        d, h, m, s = re.fullmatch(
+            r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+(?:\.\d+)?)",
+            s
+        ).groups()
+        seconds = timedelta(
+            days=int(d) if d else 0,
+            hours=int(h) if h else 0,
+            minutes=int(m),
+            seconds=float(s)
+        ).total_seconds()
+        return math.floor(seconds)
 
     @staticmethod
     def parse_memory(s: str) -> float | None:
-        m = re.fullmatch(r"(\d+(?:\.\d+)?)([KMGTP])?", s)
-        if m:
-            value, suffix = m.groups()
-            i = [None, "K", "M", "G", "T", "P"].index(suffix)
-            return float(value) / pow(1024, i)
+        if not s:
+            return None
 
-        return None
+        suffixes = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
+        factor = suffixes.get(s[-1], 0)
+        if factor != 0:
+            s = s[:-1]
+
+        # In MB
+        return float(s) * pow(1024, factor) / pow(1024, 2)
 
     @staticmethod
     def run_sacct(jobid: int) -> dict[str, Any]:
-        fields = ["JobID", "Submit", "Start",
-                  "End", "State", "TotalCPU", "ReqMem", "MaxRSS"]
+        fields = [
+            ("JobID", str, None),
+            ("Submit", SlurmExecutor.parse_date, min),
+            ("Start", SlurmExecutor.parse_date, min),
+            ("End", SlurmExecutor.parse_date, max),
+            ("State", str, None),
+            ("TotalCPU", SlurmExecutor.parse_time, max),
+            ("ReqMem", SlurmExecutor.parse_memory, None),
+            ("MaxRSS", SlurmExecutor.parse_memory, max),
+        ]
         sep = chr(30)
         cmd = [
             "sacct",
             "--parsable2",
             "--delimiter", sep,
             "--noheader",
-            "--format", ",".join(fields),
+            "--format", ",".join([field[0] for field in fields]),
             "-j", str(jobid)
         ]
         outs, _ = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
 
-        data = {key: None for key in fields}
-
-        for line in outs.decode().splitlines():
-            try:
-                values = line[0].split(sep)
-            except IndexError:
-                raise ValueError(f"cannot parse sacct output: {line}")
+        data = {field[0]: None for field in fields}
+        for line in outs.splitlines():
+            values = line.decode("utf-8").split(sep)
 
             if values[0].endswith(".extern"):
                 continue
 
-            for field, value in zip(fields[1:], values[1:]):
-                if field in ("Submit", "Start", "State"):
-                    if field != "State":
-                        value = SlurmExecutor.parse_date(value)
+            for (key, parser, comparator), value in zip(fields, values):
+                if value == "":
+                    continue
 
-                    if value and data[field] is None:
-                        data[field] = value
-                else:
-                    if field == "End":
-                        value = SlurmExecutor.parse_date(value)
-                    elif field == "TotalCPU":
-                        value = SlurmExecutor.parse_time(value)
-                    else:
-                        value = SlurmExecutor.parse_memory(value)
-
-                    if data[field] is None or value > data[field]:
-                        data[field] = value
+                value = parser(value)
+                if value is None:
+                    continue
+                elif data[key] is None:
+                    data[key] = value
+                elif comparator:
+                    data[key] = comparator(data[key], value)
 
         return data
 
@@ -195,15 +194,7 @@ class SlurmExecutor:
 
     def get_cpu_time(self, *args) -> int:
         info = self.get_jobinfo()
-        pattern = r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)"  # [DD-[HH:]]MM:SS
-        d, h, m, s = re.fullmatch(pattern, info["TotalCPU"]).groups()
-        seconds = timedelta(
-            days=int(d) if d else 0,
-            hours=int(h) if h else 0,
-            minutes=int(m),
-            seconds=int(s)
-        ).total_seconds()
-        return math.floor(seconds)
+        return math.floor(info["TotalCPU"])
 
     def kill(self, force: bool = False):
         if self.id is None:
