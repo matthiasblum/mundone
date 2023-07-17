@@ -133,7 +133,7 @@ class SlurmExecutor:
 
     @staticmethod
     def parse_memory(s: str) -> float | None:
-        if not s:
+        if not s or s == "16?":
             return None
 
         suffixes = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
