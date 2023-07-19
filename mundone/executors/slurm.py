@@ -192,9 +192,11 @@ class SlurmExecutor:
         info = self.get_jobinfo()
         return info["MaxRSS"]
 
-    def get_cpu_time(self, *args) -> int:
+    def get_cpu_time(self, *args) -> int | None:
         info = self.get_jobinfo()
-        return math.floor(info["TotalCPU"])
+        if info["TotalCPU"] is not None:
+            return math.floor(info["TotalCPU"])
+        return None
 
     def kill(self, force: bool = False):
         if self.id is None:
