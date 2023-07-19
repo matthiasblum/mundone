@@ -29,6 +29,7 @@ class LsfExecutor:
         self.scratch = params.get("scratch")
         self.out_file = None
         self.id = None
+        self._seen_running = False
 
     def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         self.out_file = out
@@ -90,7 +91,7 @@ class LsfExecutor:
         try:
             out, err = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         except OSError:
-            return None
+            return states.PENDING
 
         out = out.strip().decode()
         err = err.strip().decode()
@@ -102,16 +103,23 @@ class LsfExecutor:
                 # Assume pending so checked again later
                 return states.PENDING
 
-            return STATES.get(lsf_status, states.PENDING)
+            status = STATES.get(lsf_status, states.PENDING)
+            if status == states.RUNNING:
+                self._seen_running = True
+
+            return status
 
         return states.NOT_FOUND
 
     def ready_to_collect(self) -> bool:
-        try:
-            with open(self.out_file, "rt") as fh:
-                return "Resource usage summary:" in fh.read()
-        except FileNotFoundError:
-            return False
+        if self._seen_running:
+            try:
+                with open(self.out_file, "rt") as fh:
+                    return "Resource usage summary:" in fh.read()
+            except FileNotFoundError:
+                return False
+        else:
+            return True
 
     def get_times(self) -> tuple[datetime | None, datetime | None]:
         with open(self.out_file, "rt") as fh:

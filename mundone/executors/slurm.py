@@ -41,12 +41,13 @@ class SlurmExecutor:
         self.limit = timedelta(hours=params.get("hours", 24))
         self.out_file = None
         self.id = None
-        self.jobinfo = None
+        self._jobinfo = None
+        self._seen_running = False
 
     def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         self.out_file = out
         self.id = None
-        self.jobinfo = None
+        self._jobinfo = None
         cmd = ["sbatch", "--parsable"]
         if self.name and isinstance(self.name, str):
             cmd += ["-J", self.name]
@@ -91,7 +92,12 @@ class SlurmExecutor:
     def poll(self) -> int:
         info = self.run_sacct(self.id)
         state = info.get("State")
-        return STATES.get(state, states.NOT_FOUND)
+        status = STATES.get(state, states.PENDING)
+
+        if status == states.RUNNING:
+            self._seen_running = True
+
+        return status
 
     def ready_to_collect(self) -> bool:
         # TODO: check that output (binary) file exists if job completed?
@@ -102,10 +108,10 @@ class SlurmExecutor:
         return info["Start"], info["End"]
 
     def get_jobinfo(self, force: bool = False) -> dict[str, Any]:
-        if force or self.jobinfo is None:
-            self.jobinfo = self.run_sacct(self.id)
+        if force or self._jobinfo is None:
+            self._jobinfo = self.run_sacct(self.id)
 
-        return self.jobinfo
+        return self._jobinfo
 
     @staticmethod
     def parse_date(s: str) -> datetime | None:
