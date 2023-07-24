@@ -43,6 +43,7 @@ class SlurmExecutor:
         self.id = None
         self._jobinfo = None
         self._seen_running = False
+        self._cancelled = False
 
     def submit(self, src: str, dst: str, out: str, err: str) -> int | None:
         self.out_file = out
@@ -96,12 +97,13 @@ class SlurmExecutor:
 
         if status == states.RUNNING:
             self._seen_running = True
+        elif status == states.CANCELLED:
+            self._cancelled = True
 
         return status
 
     def ready_to_collect(self) -> bool:
-        # TODO: check that output (binary) file exists if job completed?
-        return os.path.isfile(self.out_file)
+        return os.path.isfile(self.out_file) or self._cancelled
 
     def get_times(self) -> tuple[datetime | None, datetime | None]:
         info = self.get_jobinfo()
