@@ -142,10 +142,6 @@ class Workflow:
 
             if name in exclude:
                 continue
-            elif row[1] is not None and row[1] < 0:
-                # Positive value: Process ID
-                # Negative value: LSF Job ID
-                task.jobid = abs(row[1])
 
             task.status = row[2]
             task.workdir = row[3]

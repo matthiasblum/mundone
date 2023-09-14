@@ -7,7 +7,16 @@ from mundone import runner, states
 
 
 class LocalExecutor:
-    def __init__(self):
+    def __init__(self, **params):
+        self.name = params.get("name")
+        self.queue = params.get("queue")
+        self.project = params.get("project")
+        self.num_cpus = params.get("cpu")
+        self.num_gpus = params.get("gpu")
+        self.memory = params.get("mem")
+        self.temp = params.get("tmp")
+        self.scratch = params.get("scratch")
+        self.id = None
         self.out = self.err = self.proc = None
         self.start_time = self.end_time = None
 
