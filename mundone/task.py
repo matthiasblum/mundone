@@ -300,7 +300,7 @@ class Task:
             self.result = None
             self.status = states.ERROR
 
-            start_time, end_time = self.executor.get_times()
+            start_time, end_time = self.executor.get_times(self.stdout)
             self.start_time = start_time or self.start_time
             self.end_time = end_time or datetime.now()
         else:

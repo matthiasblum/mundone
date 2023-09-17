@@ -47,7 +47,7 @@ class LocalExecutor:
     def ready_to_collect(self) -> bool:
         return True
 
-    def get_times(self) -> tuple[datetime, datetime]:
+    def get_times(self, *args) -> tuple[datetime, datetime]:
         return self.start_time, self.end_time
 
     @staticmethod

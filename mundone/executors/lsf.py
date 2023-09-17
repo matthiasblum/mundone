@@ -121,11 +121,9 @@ class LsfExecutor:
         else:
             return True
 
-    def get_times(self) -> tuple[datetime | None, datetime | None]:
-        with open(self.out_file, "rt") as fh:
-            stdout = fh.read()
-
-        return self.get_times_from_string(stdout)
+    @staticmethod
+    def get_times(stdout: str) -> tuple[datetime | None, datetime | None]:
+        return LsfExecutor.get_times_from_string(stdout)
 
     @staticmethod
     def get_times_from_string(stdout: str) -> tuple[datetime | None,

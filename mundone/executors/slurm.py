@@ -105,7 +105,7 @@ class SlurmExecutor:
     def ready_to_collect(self) -> bool:
         return os.path.isfile(self.out_file) or self._cancelled
 
-    def get_times(self) -> tuple[datetime | None, datetime | None]:
+    def get_times(self, *args) -> tuple[datetime | None, datetime | None]:
         info = self.get_jobinfo()
         return info["Start"], info["End"]
 
