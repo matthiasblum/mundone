@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mundone"
+version = "0.6.2"
+description = "Get mundane tasks done"
+readme = "README.md"
+authors = [{ name = "Matthias Blum", email = "mblum@ebi.ac.uk" },]
+license = { file = "LICENSE" }
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: Public Domain",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Clustering",
+    "Topic :: System :: Distributed Computing",
+]
+keywords = ["workflow", "distributed computing", "LSF", "Slurm"]
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/matthiasblum/mundone"
+
+[project.scripts]
+mundone-query = "mundone.workflow:query_db"

@@ -1,5 +1,4 @@
 from threading import Thread
-from typing import Iterable
 from queue import Queue, Empty
 
 from .task import Task
