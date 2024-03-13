@@ -27,6 +27,7 @@ class LsfExecutor:
         self.memory = params.get("mem")
         self.temp = params.get("tmp")
         self.scratch = params.get("scratch")
+        self.limit = None  # we don't support runtime limit (-W) for LSF
         self.out_file = None
         self.id = None
         self._seen_running = False
