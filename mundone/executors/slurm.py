@@ -87,8 +87,16 @@ class SlurmExecutor:
         cmd += ["--wrap", f"{sys.executable} {runner_file} {src} {dst}"]
         outs, errs = Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()
         outs = outs.strip().decode()
-        self.id = int(outs)
-        return self.id
+        try:
+            job_id = int(outs)
+        except IndexError as exc:
+            sys.stderr.write(f"IndexError/start: {exc}: "
+                             f"{outs.rstrip()} - {errs.rstrip()}\n")
+        else:
+            self.id = job_id
+            return job_id
+
+        return None
 
     def poll(self) -> int:
         info = self.run_sacct(self.id)
