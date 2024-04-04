@@ -80,6 +80,9 @@ class LsfExecutor:
         except IndexError as exc:
             sys.stderr.write(f"IndexError/start: {exc}: "
                              f"{outs.rstrip()} - {errs.rstrip()}\n")
+        except ValueError as exc:
+            sys.stderr.write(f"ValueError/start: {exc}: "
+                             f"{outs.rstrip()} - {errs.rstrip()}\n")
         else:
             self.id = job_id
             return job_id

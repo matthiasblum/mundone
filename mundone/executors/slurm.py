@@ -89,8 +89,8 @@ class SlurmExecutor:
         outs = outs.strip().decode()
         try:
             job_id = int(outs)
-        except IndexError as exc:
-            sys.stderr.write(f"IndexError/start: {exc}: "
+        except ValueError as exc:
+            sys.stderr.write(f"ValueError/start: {exc}: "
                              f"{outs.rstrip()} - {errs.rstrip()}\n")
         else:
             self.id = job_id
