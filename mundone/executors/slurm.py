@@ -72,10 +72,10 @@ class SlurmExecutor:
             cmd += ["--gpus-per-task", self.num_gpus]
 
         if isinstance(self.memory, (float, int)):
-            cmd.append(f"--mem={self.memory}M")
+            cmd.append(f"--mem={self.memory:.0f}M")
 
         if isinstance(self.temp, (float, int)):
-            cmd.append(f"--tmp={self.temp}M")
+            cmd.append(f"--tmp={self.temp:.0f}M")
 
         time_limit = self.limit.total_seconds()
         hours, remainder = divmod(time_limit, 3600)
