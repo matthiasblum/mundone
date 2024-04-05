@@ -208,6 +208,10 @@ class SlurmExecutor:
         info = self.get_jobinfo()
         return info["MaxRSS"]
 
+    def is_oom(self, *args) -> bool:
+        info = self.get_jobinfo()
+        return info.get("State") == "OUT_OF_MEMORY"
+
     def get_cpu_time(self, *args) -> int | None:
         info = self.get_jobinfo()
         if info["TotalCPU"] is not None:

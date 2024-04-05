@@ -51,6 +51,11 @@ class LocalExecutor:
         return self.start_time, self.end_time
 
     @staticmethod
+    def is_oom(*args) -> bool:
+        # Cannot know? Assume false.
+        return False
+
+    @staticmethod
     def get_max_memory(*args):
         return None
 

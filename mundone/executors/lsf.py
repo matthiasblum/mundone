@@ -157,6 +157,12 @@ class LsfExecutor:
         except (AttributeError, ValueError):
             return None
 
+    def is_oom(self, stdout: str) -> bool:
+        maxmem = self.get_max_memory(stdout)
+        return (maxmem is not None and
+                self.memory is not None and
+                maxmem >= self.memory)
+
     @staticmethod
     def get_cpu_time(stdout: str) -> int | None:
         match = re.search(r"^\s*CPU time :\s+(\d+)\.\d+ sec.$", stdout, re.M)

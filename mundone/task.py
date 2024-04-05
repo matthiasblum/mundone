@@ -123,6 +123,9 @@ class Task:
         # In MB
         return self.executor.get_max_memory(self.stdout)
 
+    def is_oom(self) -> bool:
+        return self.executor.is_oom(self.stdout)
+
     def pack(self, workdir: str):
         if self.workdir is None:
             if self.add_random_suffix:
