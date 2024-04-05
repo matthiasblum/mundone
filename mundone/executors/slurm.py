@@ -91,7 +91,7 @@ class SlurmExecutor:
             job_id = int(outs)
         except ValueError as exc:
             sys.stderr.write(f"ValueError/start: {exc}: "
-                             f"{outs.rstrip()} - {errs.rstrip()}\n")
+                             f"{outs.rstrip()} - {errs.rstrip()}\n{cmd}\n")
         else:
             self.id = job_id
             return job_id

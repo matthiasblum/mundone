@@ -79,10 +79,10 @@ class LsfExecutor:
             job_id = int(outs.split('<')[1].split('>')[0])
         except IndexError as exc:
             sys.stderr.write(f"IndexError/start: {exc}: "
-                             f"{outs.rstrip()} - {errs.rstrip()}\n")
+                             f"{outs.rstrip()} - {errs.rstrip()}\n{cmd}\n")
         except ValueError as exc:
             sys.stderr.write(f"ValueError/start: {exc}: "
-                             f"{outs.rstrip()} - {errs.rstrip()}\n")
+                             f"{outs.rstrip()} - {errs.rstrip()}\n{cmd}\n")
         else:
             self.id = job_id
             return job_id
