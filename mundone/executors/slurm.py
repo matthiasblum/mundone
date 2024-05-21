@@ -161,13 +161,17 @@ class SlurmExecutor:
         return float(s) * pow(1024, factor) / pow(1024, 2)
 
     @staticmethod
+    def parse_state(s: str) -> str:
+        return s.split()[0]
+
+    @staticmethod
     def run_sacct(jobid: int) -> dict[str, Any]:
         fields = [
             ("JobID", str, None),
             ("Submit", SlurmExecutor.parse_date, min),
             ("Start", SlurmExecutor.parse_date, min),
             ("End", SlurmExecutor.parse_date, max),
-            ("State", str, None),
+            ("State", SlurmExecutor.parse_state, None),
             ("TotalCPU", SlurmExecutor.parse_time, max),
             ("ReqMem", SlurmExecutor.parse_memory, None),
             ("MaxRSS", SlurmExecutor.parse_memory, max),
