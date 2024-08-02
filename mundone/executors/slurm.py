@@ -99,7 +99,7 @@ class SlurmExecutor:
         return None
 
     def poll(self) -> int:
-        info = self.run_sacct(self.id)
+        info = self.get_jobinfo(force=True)
         state = info.get("State")
         status = STATES.get(state, states.PENDING)
 
