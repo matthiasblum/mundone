@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mundone"
-version = "0.8.0"
+version = "0.8.1"
 description = "Get mundane tasks done"
 readme = "README.md"
 authors = [{ name = "Matthias Blum", email = "mblum@ebi.ac.uk" },]
