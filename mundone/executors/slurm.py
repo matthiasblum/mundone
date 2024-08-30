@@ -101,7 +101,7 @@ class SlurmExecutor:
     def poll(self) -> int:
         info = self.get_jobinfo(force=True)
         state = info.get("State")
-        status = STATES.get(state, states.UNKNOWN)
+        status = STATES.get(state, states.NOT_FOUND)
 
         if status == states.RUNNING:
             self._seen_running = True
