@@ -332,6 +332,9 @@ class Task:
     def set_pending(self):
         self.status = states.PENDING
 
+    def set_running(self):
+        self.status = states.RUNNING
+
     def set_successful(self):
         self.status = states.SUCCESS
 
