@@ -329,6 +329,15 @@ class Task:
 
         return False
 
+    def set_pending(self):
+        self.status = states.PENDING
+
+    def set_successful(self):
+        self.status = states.SUCCESS
+
+    def set_failed(self):
+        self.status = states.ERROR
+
 
 class TaskOutput:
     def __init__(self, task: Task):
