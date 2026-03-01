@@ -1,152 +1,350 @@
 # Mundone
 
-Mundone is a Python library to get mundane tasks done by building complex workflows.
+Mundone is a small Python workflow library for running Python callables as tasks,
+tracking their state, and orchestrating dependencies locally or via LSF/Slurm.
 
 ## Requirements
 
-* Python 3.9+
+- Python `>=3.9`
+- Linux/Unix environment (LSF/Slurm support requires the corresponding CLIs)
 
 ## Installation
 
+Mundone is not published on PyPI. Install it from source:
+
 ```sh
-pip install mundone
+pip install .
 ```
 
-## Usage
+For development:
 
-### Task
-
-A `Task` is a basic processing unit to execute functions.
-
-#### Parameters
-
-* _fn_ (`Callable`): function to be executed.
-* _args_ (`list` | `tuple` | None): list or tuple of arguments to be passed to _fn_.
-* _kwargs_ (`dict` | None): dictionary of keyword arguments to be passed to _fn_.
-* _name_ (`str` | None): name of the task. Used to name the job when executing 
-                         the task using the LSF or Slurm job scheduler (defaults to the name of _fn_).
-* _scheduler_ (`dict` | None): dictionary specifying the job scheduler to use and job requirements:
-  * _type_ (`str`): must be `lsf` or `slurm`.
-  * _queue_ (`str` | None): LSF queue or Slurm partition.
-  * _cpu_ (`int` | None): specifies to number of processors required by the job.
-  * _gpu_ (`int` | `str` | None): specifies properties of GPU resources required by the job.
-  * _mem_ (`int` | `float` | None): specifies the memory (in MB) required by the job.
-  * _tmp_ (`int` | `float` | None): specifies the amount temporary disk space required by the job.
-* _requires_ (`list`): list of the names of tasks the task directly depends on.
-* _random_suffix_ (`bool`): if True (default), temporary files are created using the name of the task and a random suffix.
-* _keep_ (`bool`): if True (default), temporary files are deleted once the task has completed.
-
-#### Methods
-
-> is_ready()
-
-Returns True if all 
-
-> is_running()
-> is_done()
-> is_successful()
-> start(dir: str)
-> terminate(force: bool = False)
-> clean(seconds: int = 30, max_attempts: int = 5)
-> wait(seconds: int = 10)
-> poll()
-> collect()
-
-#### Properties
-
-* _state_ (`str`): represents the current state of the task (pending, running, failed, cancelled, done).
-* _cputime_ (`int` | None): CPU time, for tasks that completed using a job scheduler.
-* _maxmem_ (`int` | None): highest memory used, for tasks that completed using a job scheduler.
-* _stdout_ (`str`): standard output of the task.
-* _stderr_ (`str`): standard error of the task.
-* _result_: whatever is returned by the task's function, or None if the task has not successfully completed.
-* _submit_time_ (`datetime.datetime` | None): date/time at which the task started.
-* _start_time_ (`datetime.datetime` | None): date/time at which the task actually started (when running task using job scheduler).
-* _end_time_ (`datetime.datetime` | None): date/time at which the task finished.
-
-#### Example
-
-The following code defines a function which uses [hmmsearch](http://hmmer.org/) 
-to search [Swiss-Prot protein sequences](https://www.uniprot.org/uniprotkb?facets=reviewed%3Atrue&query=%2A) 
-using [Pfam profile hidden Markov models](https://www.ebi.ac.uk/interpro/entry/pfam/), 
-and a Task to execute the function using the LSF job scheduler.
-
-```py
-import subprocess as sp
-from mundone import Task
-
-
-def hmmsearch(hmmfile: str, seqdb: str, output: str, **kwargs):
-    num_threads = kwargs.get("threads")
-    
-    cmd = ["hmmsearch", "-o", output]
-    
-    if isinstance(num_threads, int) and num_threads >= 0:
-        cmd += ["--cpu", str(num_threads)]
-        
-    cmd += [hmmfile, seqdb]
-    sp.run(cmd, check=True)
-
-
-hmmfile = "Pfam-A.hmm"
-seqdb = "uniprot_sprot.fasta"
-output = "Pfam-A.hits.out"
-task = Task(hmmsearch, [hmmfile, seqdb, output], {"threads": 8},
-            name="run-hmmsearch",
-            scheduler={
-                "type": "lsf",
-                "queue": "standard",
-                "cpu": 8,
-                "memory": 1000
-            })
-
-task.start()
-task.wait()
-if task.is_successful():
-    print("ok")
-else:
-    print(f"error: {task.stdout} {task.stderr}")
+```sh
+pip install -e .
 ```
 
-### Pool
+## What Mundone Exports
 
-A `Pool` controls a pool of worker 
-A task pool object which controls a pool of worker processes to which jobs 
-can be submitted. It supports asynchronous results with timeouts and callbacks and has a parallel map implementation.
+```python
+from mundone import (
+    Pool,
+    Task,
+    Workflow,
+    as_completed,
+    get_descendants,
+    get_terminals,
+    states,
+)
+```
 
-#### Parameters
+## Quickstart (local workflow)
 
-* _path_ (`str`):
-* _max_running_ (`int`):
-* _kill_on_exit_ (`bool`):
-* _threads_ (`int`):
+```python
+from mundone import Task, Workflow
 
-#### Methods
 
-> submit(task: Task)
+def add(a, b):
+    return a + b
 
-dfg
 
-> as_completed(wait: bool = False)
+def multiply(x, factor):
+    return x * factor
 
-> terminate()
 
-#### Example
+t1 = Task(add, args=(2, 3), name="add")
+t2 = Task(multiply, args=(t1.output, 10), name="multiply")  # depends on t1
 
-### Workflow
+with Workflow([t1, t2], dir="workflows") as wf:
+    ok = wf.run()
 
-#### Parameters
+print(ok)          # True/False
+print(t2.result)   # 50
+```
 
-* _tasks_
-* _name_
-* _id_
-* _dir_
-* _database_
+## Core Concepts
 
-#### Methods
+### Execution model
 
-run(tasks: list[str] | None = None, dry_run: bool = False, max_retries: int = 0, monitor: bool = True)
+Each `Task` runs in a separate Python process through `mundone.runner`.
 
-terminate()
+Practical implications:
 
-#### Example
+- The callable, its arguments, and its return value must be picklable.
+- The callable should be importable from a module (avoid lambdas/closures).
+- `stdout`/`stderr` are captured and exposed on the `Task`.
+- When tasks are managed by `Workflow`, `task.result` is also stored in SQLite as
+  JSON, so return values should be JSON-serializable (or `None`).
+
+### `Task`
+
+`Task` is the basic execution unit.
+
+Constructor:
+
+```python
+Task(fn, args=None, kwargs=None, **options)
+```
+
+Required arguments:
+
+- `fn` (`Callable`): function to execute.
+- `args` (`list | tuple | None`): positional arguments.
+- `kwargs` (`dict | None`): keyword arguments.
+
+Common `options`:
+
+- `name` (`str`, default: `fn.__name__`): unique task name (must be unique in a
+  `Workflow`).
+- `scheduler` (`dict | None`): run via scheduler (`lsf`/`slurm`) instead of
+  local execution.
+- `requires` (iterable of `str | Task`): explicit dependencies.
+- `random_suffix` (`bool`, default: `True`): if `False`, use a stable task
+  workdir name (`<workflow_dir>/<task_name>`).
+- `keep` (`bool`, default: `False`): keep temporary task files/workdir after
+  collection.
+
+#### Declaring dependencies
+
+Mundone supports two dependency styles (often mixed):
+
+1. Explicit dependency names/tasks via `requires=...`
+2. Data dependency via `task.output`
+
+Example:
+
+```python
+t1 = Task(step1, name="step1")
+t2 = Task(step2, args=(t1.output,), name="step2")  # auto-dependency on step1
+t3 = Task(step3, name="step3", requires=["step2"])
+```
+
+When a task starts, any `TaskOutput` arguments are replaced with the upstream
+task result (only if the upstream task completed successfully).
+
+#### Scheduler configuration (`scheduler=...`)
+
+If `scheduler` is omitted, Mundone uses local execution.
+
+`scheduler` is a dict with:
+
+- `type` (required): `"lsf"` or `"slurm"` (case-insensitive)
+- `queue`: LSF queue / Slurm partition
+- `project`: LSF project (`-P`) (stored on Slurm executor but not currently used)
+- `cpu`: CPUs requested
+- `gpu`: GPU request (`int` or scheduler-specific string)
+- `mem`: memory in MB
+- `tmp`: temporary disk in MB
+- `scratch`: scratch space in MB (LSF only)
+- `hours`: wall time limit in hours (Slurm only; default `24`)
+
+Typical scheduler-backed task declaration:
+
+```python
+Task(
+    fn=export_data,
+    args=(src_uri, out_file),
+    name="export-data",
+    scheduler=dict(type="slurm", queue="production", cpu=16, mem=32000, hours=48),
+)
+```
+
+#### Task lifecycle methods
+
+- `start(dir=...) -> bool`: submit/start the task (local or scheduler-backed).
+- `poll()`: refresh status.
+- `wait(seconds=10)`: block until completion.
+- `terminate(force=False)`: stop the task.
+- `collect()`: collect logs/result and finalize state.
+- `clean(seconds=30, max_attempts=5)`: remove task temp workdir (usually called
+  by `collect()` unless `keep=True`).
+
+Status helpers:
+
+- `is_ready()`
+- `is_running()`
+- `is_done()`
+- `is_successful()`
+- `is_oom()`
+
+#### Task properties
+
+- `name`
+- `id` (PID / scheduler job id)
+- `status` (numeric constant from `mundone.states`)
+- `state` (`"pending" | "running" | "failed" | "cancelled" | "done"`)
+- `workdir`
+- `stdout`, `stderr`
+- `result`
+- `create_time`, `submit_time`, `start_time`, `end_time`
+- `cputime` (scheduler-dependent)
+- `maxmem` (MB, scheduler-dependent)
+- `output` (dependency placeholder used by downstream tasks)
+
+### `Workflow`
+
+`Workflow` orchestrates a DAG of tasks and persists task state in a SQLite
+database.
+
+Constructor:
+
+```python
+Workflow(tasks, name=None, id="1", dir=os.getcwd(), database=None)
+```
+
+Behavior:
+
+- Validates that task names are unique.
+- Validates that all `requires` dependencies refer to known tasks.
+- Creates/uses a SQLite database to track executions.
+- Restores task state from the database on startup.
+
+Database path resolution:
+
+- If `database` is provided, it is used directly.
+- Else if `name` is provided: `<dir>/<name>.db`
+- Else: `<dir>/mundone.sqlite`
+
+`id` is a workflow-instance identifier stored in the database and must be a
+string.
+
+#### Running a workflow
+
+```python
+ok = workflow.run(tasks=None, dry_run=False, max_retries=0, monitor=True)
+```
+
+Parameters:
+
+- `tasks` (`list[str] | None`):
+  - `None`: run all tasks (do not skip previously completed tasks)
+  - list of task names: run only those targets and their required ancestors;
+    Mundone may skip already-up-to-date tasks based on prior state/timestamps
+- `dry_run` (`bool`): print task names that would run and exit
+- `max_retries` (`int`): retries for failed tasks (`-1` = unlimited)
+- `monitor` (`bool`):
+  - `True`: submit and monitor until completion
+  - `False`: insert task rows in the workflow DB and return immediately,
+    without submitting/running them yet (used by "detach" CLIs)
+
+Return value:
+
+- `True` if all required tasks completed successfully
+- `False` if one or more tasks failed/cancelled
+
+#### Workflow helper methods
+
+- `get_remaining_tasks() -> list[str]`: return terminal tasks that are not yet
+  successful (useful for "run all except completed" behavior)
+- `terminate()`: terminate running tasks tracked by this workflow instance
+
+`Workflow` is a context manager; exiting the context calls `terminate()`.
+
+### Workflow graph helpers
+
+#### `get_terminals(tasks, targets=None) -> list[Task]`
+
+Returns terminal tasks (tasks that are not dependencies of other tasks).
+
+Common pattern: create a barrier/group task that depends on all terminal tasks
+in a phase.
+
+```python
+def wait():
+    pass
+
+export_tasks = [...]
+tasks = export_tasks + [
+    Task(fn=wait, name="export", requires=get_terminals(export_tasks))
+]
+```
+
+With `targets`, only terminal tasks among the selected names are returned:
+
+```python
+Task(fn=wait, name="xrefs", requires=get_terminals(tasks, [t.name for t in xref_tasks]))
+```
+
+#### `get_descendants(tasks, root) -> list[Task]`
+
+Returns all downstream tasks that depend (directly or indirectly) on `root`.
+
+#### `as_completed(tasks, seconds=10)`
+
+Poll a list of already-started tasks and yield them as they complete.
+
+```python
+tasks = [Task(job, args=(i,), name=f"job-{i}") for i in range(10)]
+for t in tasks:
+    t.start()
+
+for t in as_completed(tasks, seconds=1):
+    print(t.name, t.state, t.result)
+```
+
+### `Pool`
+
+`Pool` is a lightweight task runner for many independent tasks with a cap on the
+number of concurrently running tasks.
+
+Constructor:
+
+```python
+Pool(path, max_running, kill_on_exit=True, threads=4)
+```
+
+Parameters:
+
+- `path` (`str`): directory used when starting tasks (`Task.start(dir=path)`)
+- `max_running` (`int`): max concurrent running tasks
+- `kill_on_exit` (`bool`, default: `True`): terminate queued/running tasks when
+  the pool is closed
+- `threads` (`int`, default: `4`): internal polling/manager threads
+
+Methods:
+
+- `submit(task)`
+- `as_completed(wait=False)`
+  - `wait=False`: yield tasks that are already complete, then return
+  - `wait=True`: block until all queued/running tasks are done
+- `terminate()`
+
+Example:
+
+```python
+from mundone import Pool, Task
+
+
+def work(i):
+    return i * i
+
+
+with Pool(path="tmp", max_running=8) as pool:
+    for i in range(100):
+        pool.submit(Task(work, args=(i,), name=f"work-{i}"))
+
+    for task in pool.as_completed(wait=True):
+        print(task.name, task.result)
+```
+
+## Inspecting Workflow Databases (`mundone-query`)
+
+Mundone installs a small CLI utility:
+
+```sh
+mundone-query path/to/workflow.sqlite
+```
+
+Useful options:
+
+- `-n/--name TASK`: print stored `stdout`/`stderr` for a task
+- `-t/--time "YYYY-MM-DD HH:MM:SS"`: disambiguate by submit time
+- `--all`: include inactive (superseded/retried) task rows
+- `--done`: show successful tasks only
+- `--lsf-memory`: show parsed LSF max memory usage
+
+Examples:
+
+```sh
+mundone-query myflow.sqlite
+mundone-query myflow.sqlite --done
+mundone-query myflow.sqlite -n export-data
+```
